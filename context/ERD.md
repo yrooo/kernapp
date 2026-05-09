@@ -27,6 +27,7 @@ erDiagram
         string title
         string vault_pda UK "Solana Vault Address"
         string source_vod_url
+        string[] social_targets
         decimal reward_rate "Per 1k views"
         decimal total_budget "SOL/USDC locked"
         jsonb ai_rules "Hard rules: face_check, audio_match"

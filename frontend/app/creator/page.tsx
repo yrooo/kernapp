@@ -1,14 +1,19 @@
 "use client";
 
-import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import Link from "next/link";
 import { useState } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { Menu, CheckCircle2, Circle, ArrowRight, ArrowLeft } from "lucide-react";
+import { SupabaseAuthButton } from "@/components/SupabaseAuthButton";
+import { useSupabaseAuth } from "@/components/WalletProvider";
+import { apiUrl, authHeaders } from "@/lib/backend";
 
 export default function CreatorDashboard() {
-  const { publicKey } = useWallet();
+  const { session, walletAddress } = useSupabaseAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [createdCampaign, setCreatedCampaign] = useState<{ id: string; title: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
   
   // Wizard State
   const [step, setStep] = useState(1);
@@ -32,10 +37,49 @@ export default function CreatorDashboard() {
 
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!publicKey) return alert("Please connect your wallet first.");
-    
-    console.log("Creating campaign with:", { title, targets, sourceUrl, checks, customReq, budget, rate, expiry, creator: publicKey.toString() });
-    alert("Campaign created on Devnet! (Mock)");
+    if (!session || !walletAddress) return alert("Please sign in with Solana first.");
+
+    setIsSubmitting(true);
+    setError(null);
+
+    const response = await fetch(apiUrl("/campaigns"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(session?.access_token, walletAddress),
+      },
+      body: JSON.stringify({
+        title,
+        vault_pda: `vault-${walletAddress.slice(0, 8)}-${Date.now()}`,
+        reward_rate: Number(rate),
+        total_budget: Number(budget),
+        source_vod_url: sourceUrl,
+        social_targets: targets,
+        ai_rules: {
+          face_check: checks.face,
+          audio_match: checks.audio,
+          subtitles: checks.subtitles,
+          duration: checks.duration,
+        },
+        soft_rules: customReq,
+        status: "active",
+        expires_at: expiry ? new Date(expiry).toISOString() : null,
+      }),
+    });
+
+    const payload = await response.json();
+    setIsSubmitting(false);
+
+    if (!response.ok) {
+      setError(payload?.detail || "Failed to create campaign.");
+      return;
+    }
+
+    const created = Array.isArray(payload.data) ? payload.data[0] : payload.data?.[0] ?? payload.data;
+    setCreatedCampaign({
+      id: created?.id ?? payload?.data?.[0]?.id ?? "unknown",
+      title: created?.title ?? title,
+    });
   };
 
   const toggleTarget = (target: string) => {
@@ -51,7 +95,7 @@ export default function CreatorDashboard() {
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
       <div className="flex-1 flex flex-col h-screen overflow-y-auto p-8">
-        <header className="mb-12 flex justify-between items-center max-w-5xl mx-auto w-full">
+        <header className="mb-12 flex justify-between items-center max-w-7xl mx-auto w-full">
           <div className="flex items-center gap-4">
             <button
               onClick={() => setIsSidebarOpen(true)}
@@ -59,10 +103,10 @@ export default function CreatorDashboard() {
             >
               <Menu size={24} />
             </button>
-            <h1 onClick={() => window.location.href = "/"} className="text-4xl font-serif font-medium tracking-tight cursor-pointer">Kern. <span className="text-muted-foreground text-2xl hidden sm:inline">/ Creator</span></h1>
+            <span className="font-serif text-muted-foreground text-2xl hidden sm:inline">Creator</span>
           </div>
           <div className="flex items-center gap-6">
-            <WalletMultiButton className="!bg-primary hover:!bg-primary/90 !rounded-full !transition-all" />
+            <SupabaseAuthButton className="!bg-primary hover:!bg-primary/90" />
           </div>
         </header>
 
@@ -78,6 +122,22 @@ export default function CreatorDashboard() {
           </div>
 
           <form onSubmit={handleCreateCampaign} className="bg-card border border-border p-8 md:p-12 rounded-[48px] shadow-sm">
+            {error && (
+              <div className="mb-6 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
+            {createdCampaign && (
+              <div className="mb-6 rounded-3xl border border-primary/20 bg-primary/5 px-5 py-4 text-sm text-foreground">
+                <p className="font-medium">Campaign created</p>
+                <p className="text-muted-foreground">
+                  {createdCampaign.title} · <span className="font-mono">{createdCampaign.id}</span>
+                </p>
+                <Link href={`/discovery`} className="mt-2 inline-block text-primary hover:underline">
+                  View in discovery
+                </Link>
+              </div>
+            )}
             {step === 1 && (
               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div>
@@ -257,8 +317,8 @@ export default function CreatorDashboard() {
                   <button type="button" onClick={() => setStep(2)} className="text-muted-foreground hover:text-foreground px-4 py-3 font-medium transition-all flex items-center gap-2">
                     <ArrowLeft size={18} /> Back
                   </button>
-                  <button type="submit" className="bg-primary text-primary-foreground px-8 py-3 rounded-full font-medium hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-2">
-                    Deposit & Launch Vault
+                  <button type="submit" disabled={isSubmitting} className="bg-primary text-primary-foreground px-8 py-3 rounded-full font-medium hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+                    {isSubmitting ? "Launching..." : "Deposit & Launch Vault"}
                   </button>
                 </div>
               </div>

@@ -31,7 +31,7 @@ export function CTASection() {
             </div>
           </Suspense>
 
-          <div className="relative z-10 px-6 max-w-4xl mx-auto text-center flex flex-col items-center">
+          <div className="relative z-10 px-6 max-w-5xl mx-auto text-center flex flex-col items-center">
 
             <div className="mb-8 inline-flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-4 py-1.5 text-sm font-medium text-primary backdrop-blur-sm">
               <span className="relative flex h-2 w-2">

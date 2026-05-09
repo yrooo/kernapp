@@ -1,5 +1,11 @@
-import random
+import hashlib
 import time
+
+
+def _stable_int(seed_text: str, minimum: int, maximum: int) -> int:
+    digest = hashlib.sha256(seed_text.encode("utf-8")).digest()
+    span = maximum - minimum + 1
+    return minimum + (int.from_bytes(digest[:8], "big") % span)
 
 def detect_platform(url: str) -> str:
     lowered = url.lower()
@@ -19,14 +25,14 @@ def scrape_video_metadata(url: str):
     print(f"[Scraper] Fetching metadata for {url}...")
     time.sleep(1)  # Simulate network delay
 
-    views = random.randint(5000, 150000)
+    views = _stable_int(f"views:{url}", 5000, 150000)
     platform = detect_platform(url)
 
     return {
         "url": url,
         "platform": platform,
         "views": views,
-        "author": "@mock_creator",
+        "author": f"@creator_{_stable_int(f'author:{url}', 1000, 9999)}",
         "video_duration_sec": 15,
     }
 

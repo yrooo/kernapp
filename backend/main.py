@@ -7,19 +7,61 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
+from dotenv import load_dotenv
 
 from oracle import verify_clip_originality
 from scraper import scrape_video_metadata
 
+load_dotenv()
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 AI_SCORE_THRESHOLD = float(os.environ.get("AI_SCORE_THRESHOLD", "0.85"))
+DEMO_AUTH_ENABLED = os.environ.get("DEMO_AUTH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
 
 db: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 ALLOWED_SOCIAL_KEYS = {"tiktok", "instagram", "youtube"}
+
+
+def _get_attr(source: Any, key: str):
+    if isinstance(source, dict):
+        return source.get(key)
+
+    return getattr(source, key, None)
+
+
+def extract_wallet_address_from_user(user: Any) -> Optional[str]:
+    user_metadata = _get_attr(user, "user_metadata") or _get_attr(user, "raw_user_meta_data") or {}
+    identities = _get_attr(user, "identities") or []
+    identity_data = {}
+
+    if identities:
+      first_identity = identities[0]
+      identity_data = _get_attr(first_identity, "identity_data") or {}
+
+    candidates = [
+        user_metadata.get("wallet_address"),
+        user_metadata.get("address"),
+        user_metadata.get("public_key"),
+        user_metadata.get("publicKey"),
+        user_metadata.get("pubkey"),
+        user_metadata.get("sub"),
+        identity_data.get("wallet_address"),
+        identity_data.get("address"),
+        identity_data.get("public_key"),
+        identity_data.get("publicKey"),
+        identity_data.get("pubkey"),
+        identity_data.get("sub"),
+    ]
+
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate:
+            return candidate
+
+    return None
 
 app = FastAPI(title="Kern Oracle Backend", description="AI Oracle for Clip-to-Earn Verification")
 
@@ -36,6 +78,7 @@ class CampaignCreate(BaseModel):
     reward_rate: float
     total_budget: float
     source_vod_url: Optional[str] = None
+    social_targets: list[str] = Field(default_factory=list)
     ai_rules: Dict[str, Any] = Field(default_factory=dict)
     soft_rules: Optional[str] = None
     status: str = "draft"
@@ -69,27 +112,41 @@ def get_current_user(
     authorization: Optional[str] = Header(default=None),
     wallet_address: Optional[str] = Header(default=None, alias="x-wallet-address"),
 ):
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Missing Bearer token")
-    token = authorization.split(" ", 1)[1].strip()
-    user_response = db.auth.get_user(token)
-    if not user_response or not user_response.user:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    profile_wallet = wallet_address
+    user_metadata: Dict[str, Any] = {}
+    auth_mode = "demo"
 
-    user = user_response.user
-    profile_wallet = wallet_address or (user.user_metadata or {}).get("wallet_address")
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        user_response = db.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        user = user_response.user
+        auth_mode = "supabase"
+        user_metadata = user.user_metadata or {}
+        profile_wallet = profile_wallet or extract_wallet_address_from_user(user) or user_metadata.get("wallet_address")
+        user_id = user.id
+    elif DEMO_AUTH_ENABLED:
+        if not profile_wallet:
+            raise HTTPException(status_code=400, detail="Wallet address required")
+        user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, profile_wallet))
+    else:
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+
     if not profile_wallet:
         raise HTTPException(status_code=400, detail="Wallet address required")
+
     profile_payload = {
-        "id": user.id,
+        "id": user_id,
         "wallet_address": profile_wallet,
-        "username": (user.user_metadata or {}).get("username"),
-        "avatar_url": (user.user_metadata or {}).get("avatar_url"),
-        "social_links": (user.user_metadata or {}).get("social_links", {}),
+        "username": user_metadata.get("username"),
+        "avatar_url": user_metadata.get("avatar_url"),
+        "social_links": user_metadata.get("social_links", {}),
     }
     db.table("profiles").upsert(profile_payload).execute()
 
-    return {"user_id": user.id, "wallet_address": profile_wallet}
+    return {"user_id": user_id, "wallet_address": profile_wallet, "auth_mode": auth_mode}
 
 def process_clip_background(clip_id: str, video_url: str, source_vod_url: Optional[str]):
     print(f"--- Starting background processing for clip {clip_id} ---")
@@ -112,6 +169,10 @@ def process_clip_background(clip_id: str, video_url: str, source_vod_url: Option
 @app.get("/")
 def read_root():
     return {"status": "Kern AI Oracle is running"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "kern-backend"}
 
 @app.get("/me")
 def get_me(user=Depends(get_current_user)):
@@ -148,7 +209,7 @@ def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
 
     response = db.table("profiles").update(updates).eq("id", user["user_id"]).execute()
     try:
-        if auth_updates:
+        if auth_updates and user.get("auth_mode") == "supabase":
             db.auth.admin.update_user_by_id(user["user_id"], {"user_metadata": auth_updates})
     except Exception as exc:
         print(f"[Auth] Failed to sync user_metadata: {exc}")
@@ -170,6 +231,26 @@ def link_social(payload: SocialLinkRequest, user=Depends(get_current_user)):
         "redirect_url": payload.redirect_url,
     }
 
+@app.get("/me/payouts")
+def get_my_payouts(user=Depends(get_current_user)):
+    clip_response = db.table("clips").select("id").eq("clipper_id", user["user_id"]).execute()
+    clip_ids = [clip["id"] for clip in (clip_response.data or [])]
+
+    if not clip_ids:
+        return {"status": "success", "data": {"payouts": [], "total_paid": 0}}
+
+    payouts_response = db.table("payouts").select("*").in_("clip_id", clip_ids).order("paid_at", desc=True).execute()
+    payouts = payouts_response.data or []
+    total_paid = sum(float(payout.get("amount_paid", 0) or 0) for payout in payouts)
+
+    return {
+        "status": "success",
+        "data": {
+            "payouts": payouts,
+            "total_paid": total_paid,
+        },
+    }
+
 @app.post("/campaigns")
 def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
     campaign = {
@@ -179,6 +260,7 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
         "source_vod_url": payload.source_vod_url,
         "reward_rate": payload.reward_rate,
         "total_budget": payload.total_budget,
+        "social_targets": payload.social_targets,
         "ai_rules": payload.ai_rules,
         "soft_rules": payload.soft_rules,
         "status": payload.status,
@@ -201,6 +283,39 @@ def get_campaign(campaign_id: str):
     if not response.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return {"status": "success", "data": response.data}
+
+@app.get("/clips/{clip_id}")
+def get_clip(clip_id: str, user=Depends(get_current_user)):
+    clip_response = db.table("clips").select("*").eq("id", clip_id).single().execute()
+    if not clip_response.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip = clip_response.data
+    if clip.get("clipper_id") != user["user_id"]:
+        campaign_response = db.table("campaigns").select("creator_id").eq("id", clip["campaign_id"]).single().execute()
+        if not campaign_response.data or campaign_response.data["creator_id"] != user["user_id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to view this clip")
+
+    snapshots_response = (
+        db.table("view_snapshots")
+        .select("*")
+        .eq("clip_id", clip_id)
+        .order("captured_at", desc=True)
+        .limit(5)
+        .execute()
+    )
+    payouts_response = db.table("payouts").select("*").eq("clip_id", clip_id).execute()
+    dispute_response = db.table("disputes").select("*").eq("clip_id", clip_id).execute()
+
+    return {
+        "status": "success",
+        "data": {
+            "clip": clip,
+            "recent_snapshots": snapshots_response.data or [],
+            "payouts": payouts_response.data or [],
+            "dispute": (dispute_response.data or [None])[0],
+        },
+    }
 
 @app.post("/submit-clip")
 def submit_clip(submission: ClipSubmission, background_tasks: BackgroundTasks, user=Depends(get_current_user)):

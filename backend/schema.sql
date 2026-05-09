@@ -23,6 +23,7 @@ CREATE TABLE campaigns (
     source_vod_url TEXT,
     reward_rate NUMERIC NOT NULL,
     total_budget NUMERIC NOT NULL,
+    social_targets TEXT[] DEFAULT '{}',
     ai_rules JSONB DEFAULT '{}'::jsonb,
     soft_rules TEXT,
     status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'funding', 'active', 'completed')),

@@ -1,5 +1,12 @@
+import hashlib
 import random
 import time
+
+
+def _stable_float(seed_text: str) -> float:
+    digest = hashlib.sha256(seed_text.encode("utf-8")).digest()
+    integer = int.from_bytes(digest[:8], "big")
+    return integer / float(2**64 - 1)
 
 def verify_clip_originality(video_url: str, source_vod_url: str | None):
     """
@@ -15,9 +22,11 @@ def verify_clip_originality(video_url: str, source_vod_url: str | None):
     )
     time.sleep(2)  # Simulate heavy AI processing
 
-    face_match = random.random() > 0.1
-    audio_match = random.random() > 0.1
-    score = round((0.55 * (1 if face_match else 0) + 0.45 * (1 if audio_match else 0)), 3)
+    face_score = round(0.7 + (_stable_float(f"face:{video_url}:{source_hint}") * 0.3), 3)
+    audio_score = round(0.65 + (_stable_float(f"audio:{source_hint}:{video_url}") * 0.35), 3)
+    face_match = face_score >= 0.8
+    audio_match = audio_score >= 0.75
+    score = round((face_score * 0.55) + (audio_score * 0.45), 3)
     status = "verified" if score >= 0.85 else "rejected"
 
     return {
@@ -26,7 +35,13 @@ def verify_clip_originality(video_url: str, source_vod_url: str | None):
         "ai_metadata": {
             "face_match": face_match,
             "audio_match": audio_match,
+            "face_score": face_score,
+            "audio_score": audio_score,
             "source_vod_url": source_vod_url,
+            "match_proof": {
+                "video_url": video_url,
+                "source_hint": source_hint,
+            },
         },
         "reason": "Match passed" if status == "verified" else "Low confidence match",
     }
