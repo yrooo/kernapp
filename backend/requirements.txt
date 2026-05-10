@@ -3,3 +3,4 @@ uvicorn
 pydantic
 supabase
 python-dotenv
+solana>=0.36,<0.37

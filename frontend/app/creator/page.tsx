@@ -14,7 +14,14 @@ export default function CreatorDashboard() {
   const { session, walletAddress } = useSupabaseAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [createdCampaign, setCreatedCampaign] = useState<{ id: string; title: string } | null>(null);
+  const [createdCampaign, setCreatedCampaign] = useState<{
+    id: string;
+    title: string;
+    vaultPda: string;
+    chainTxSignature: string;
+    chainStatus: string;
+    chainCluster: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState<string | null>(null);
@@ -92,7 +99,6 @@ export default function CreatorDashboard() {
       },
       body: JSON.stringify({
         title,
-        vault_pda: `vault-${walletAddress.slice(0, 8)}-${Date.now()}`,
         reward_rate: Number(rate),
         total_budget: Number(budget),
         source_vod_url: sourceUrl,
@@ -122,6 +128,10 @@ export default function CreatorDashboard() {
     setCreatedCampaign({
       id: created?.id ?? payload?.data?.[0]?.id ?? "unknown",
       title: created?.title ?? title,
+      vaultPda: created?.vault_pda ?? "unknown",
+      chainTxSignature: created?.chain_tx_signature ?? "unknown",
+      chainStatus: created?.chain_status ?? "unknown",
+      chainCluster: created?.chain_cluster ?? "unknown",
     });
   };
 
@@ -166,6 +176,15 @@ export default function CreatorDashboard() {
                 <p className="font-medium">Campaign created</p>
                 <p className="text-muted-foreground">
                   {createdCampaign.title} · <span className="font-mono">{createdCampaign.id}</span>
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground break-all">
+                  Vault PDA: <span className="font-mono text-foreground">{createdCampaign.vaultPda}</span>
+                </p>
+                <p className="text-xs text-muted-foreground break-all">
+                  Chain tx: <span className="font-mono text-foreground">{createdCampaign.chainTxSignature}</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Status: <span className="font-mono text-foreground">{createdCampaign.chainStatus}</span> on <span className="font-mono text-foreground">{createdCampaign.chainCluster}</span>
                 </p>
                 <Link href={`/discovery`} className="mt-2 inline-block text-primary hover:underline">
                   View in discovery

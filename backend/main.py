@@ -16,6 +16,13 @@ from dotenv import load_dotenv
 
 from oracle import verify_clip_originality
 from scraper import scrape_video_metadata
+from solana_chain import (
+    ChainIntegrationError,
+    derive_campaign_pda,
+    generate_campaign_seed,
+    send_initialize_campaign,
+    sol_to_lamports,
+)
 
 load_dotenv()
 
@@ -276,7 +283,7 @@ app.add_middleware(
 
 class CampaignCreate(BaseModel):
     title: str
-    vault_pda: str
+    vault_pda: Optional[str] = None
     reward_rate: float
     total_budget: float
     source_vod_url: Optional[str] = None
@@ -575,10 +582,43 @@ def get_my_payouts(user=Depends(get_current_user)):
 @app.post("/campaigns")
 def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
     user_db = get_user_db(user)
+    creator_wallet = user["wallet_address"]
+
+    if payload.reward_rate <= 0 or payload.total_budget <= 0:
+        raise HTTPException(status_code=400, detail="Budget and reward rate must be greater than zero")
+
+    campaign_seed = generate_campaign_seed()
+    expires_at = payload.expires_at
+    if expires_at is None:
+        raise HTTPException(status_code=400, detail="Expiry date is required")
+
+    budget_lamports = sol_to_lamports(payload.total_budget)
+    rate_lamports = sol_to_lamports(payload.reward_rate)
+
+    try:
+        vault_pda, _ = derive_campaign_pda(creator_wallet, campaign_seed)
+        if payload.vault_pda and payload.vault_pda != vault_pda:
+            raise HTTPException(status_code=400, detail="Vault PDA does not match the derived Solana address")
+
+        chain_tx = send_initialize_campaign(
+            creator_wallet=creator_wallet,
+            seed=campaign_seed,
+            budget_lamports=budget_lamports,
+            rate_per_1k_lamports=rate_lamports,
+            expiry_ts=int(expires_at.timestamp()),
+        )
+    except ChainIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     campaign = {
         "creator_id": user["user_id"],
         "title": payload.title,
-        "vault_pda": payload.vault_pda,
+        "vault_pda": chain_tx.campaign_pda,
+        "chain_campaign_seed": campaign_seed,
+        "chain_program_id": chain_tx.program_id,
+        "chain_tx_signature": chain_tx.signature,
+        "chain_cluster": chain_tx.cluster,
+        "chain_status": "active",
         "source_vod_url": payload.source_vod_url,
         "thumbnail_url": payload.thumbnail_url,
         "reward_rate": payload.reward_rate,
@@ -586,8 +626,8 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
         "social_targets": payload.social_targets,
         "ai_rules": payload.ai_rules,
         "soft_rules": payload.soft_rules,
-        "status": payload.status,
-        "expires_at": payload.expires_at.isoformat() if payload.expires_at else None,
+        "status": "active",
+        "expires_at": expires_at.isoformat(),
     }
     response = user_db.table("campaigns").insert(campaign).execute()
     return {"status": "success", "data": response.data}
