@@ -14,6 +14,32 @@ CREATE TABLE profiles (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- SOCIAL_ACCOUNTS: linked social identities + tokens
+CREATE TABLE social_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('tiktok', 'instagram', 'youtube')),
+    provider_user_id TEXT,
+    provider_username TEXT,
+    access_token TEXT,
+    refresh_token TEXT,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    scope TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (profile_id, provider)
+);
+
+-- OAUTH_STATES: temporary OAuth state storage
+CREATE TABLE oauth_states (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL CHECK (provider IN ('tiktok', 'instagram', 'youtube')),
+    redirect_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- CAMPAIGNS: creator vaults and rules
 CREATE TABLE campaigns (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -21,6 +47,7 @@ CREATE TABLE campaigns (
     title TEXT NOT NULL,
     vault_pda TEXT UNIQUE NOT NULL,
     source_vod_url TEXT,
+    thumbnail_url TEXT,
     reward_rate NUMERIC NOT NULL,
     total_budget NUMERIC NOT NULL,
     social_targets TEXT[] DEFAULT '{}',
@@ -78,6 +105,9 @@ CREATE TABLE disputes (
 
 -- Indexes
 CREATE INDEX idx_profiles_wallet ON profiles(wallet_address);
+CREATE INDEX idx_social_accounts_profile ON social_accounts(profile_id);
+CREATE INDEX idx_social_accounts_provider ON social_accounts(provider);
+CREATE INDEX idx_oauth_states_profile ON oauth_states(profile_id);
 CREATE INDEX idx_campaigns_creator ON campaigns(creator_id);
 CREATE INDEX idx_clips_campaign ON clips(campaign_id);
 CREATE INDEX idx_clips_clipper ON clips(clipper_id);
@@ -86,6 +116,8 @@ CREATE INDEX idx_payouts_clip ON payouts(clip_id);
 
 -- Row Level Security (RLS)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE social_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE oauth_states ENABLE ROW LEVEL SECURITY;
 ALTER TABLE campaigns ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE view_snapshots ENABLE ROW LEVEL SECURITY;
@@ -99,6 +131,24 @@ CREATE POLICY "profiles_insert_own" ON profiles
     FOR INSERT WITH CHECK (id = auth.uid());
 CREATE POLICY "profiles_update_own" ON profiles
     FOR UPDATE USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+
+-- Social accounts: users manage their own linked accounts
+CREATE POLICY "social_accounts_select_own" ON social_accounts
+    FOR SELECT USING (profile_id = auth.uid());
+CREATE POLICY "social_accounts_insert_own" ON social_accounts
+    FOR INSERT WITH CHECK (profile_id = auth.uid());
+CREATE POLICY "social_accounts_update_own" ON social_accounts
+    FOR UPDATE USING (profile_id = auth.uid()) WITH CHECK (profile_id = auth.uid());
+CREATE POLICY "social_accounts_delete_own" ON social_accounts
+    FOR DELETE USING (profile_id = auth.uid());
+
+-- OAuth states: users can create and read their own state
+CREATE POLICY "oauth_states_select_own" ON oauth_states
+    FOR SELECT USING (profile_id = auth.uid());
+CREATE POLICY "oauth_states_insert_own" ON oauth_states
+    FOR INSERT WITH CHECK (profile_id = auth.uid());
+CREATE POLICY "oauth_states_delete_own" ON oauth_states
+    FOR DELETE USING (profile_id = auth.uid());
 
 -- Campaigns: creators can manage their own campaigns; anyone can read active campaigns
 CREATE POLICY "campaigns_select_active" ON campaigns

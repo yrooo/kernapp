@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/sidebar";
 import { CheckCircle2, Circle, ArrowRight, ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { SupabaseAuthButton } from "@/components/SupabaseAuthButton";
 import { useSupabaseAuth } from "@/components/WalletProvider";
 import { apiUrl, authHeaders } from "@/lib/backend";
+import { supabase } from "@/lib/supabase";
 
 export default function CreatorDashboard() {
   const { session, walletAddress } = useSupabaseAuth();
@@ -15,6 +16,8 @@ export default function CreatorDashboard() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdCampaign, setCreatedCampaign] = useState<{ id: string; title: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState<string | null>(null);
   
   // Wizard State
   const [step, setStep] = useState(1);
@@ -36,12 +39,50 @@ export default function CreatorDashboard() {
   const [rate, setRate] = useState("");
   const [expiry, setExpiry] = useState("");
 
+  const THUMBNAIL_BUCKET = "campaign-thumbnails";
+
+  useEffect(() => {
+    if (!thumbnailFile) {
+      setThumbnailPreviewUrl(null);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(thumbnailFile);
+    setThumbnailPreviewUrl(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [thumbnailFile]);
+
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!session || !walletAddress) return alert("Please sign in with Solana first.");
 
     setIsSubmitting(true);
     setError(null);
+
+    let thumbnailUrl: string | null = null;
+    if (thumbnailFile) {
+      const cleanName = thumbnailFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `${walletAddress}/${Date.now()}-${cleanName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(THUMBNAIL_BUCKET)
+        .upload(storagePath, thumbnailFile, {
+          upsert: true,
+          contentType: thumbnailFile.type,
+        });
+
+      if (uploadError) {
+        setIsSubmitting(false);
+        setError("Failed to upload thumbnail. Please try again.");
+        return;
+      }
+
+      const { data } = supabase.storage.from(THUMBNAIL_BUCKET).getPublicUrl(storagePath);
+      thumbnailUrl = data?.publicUrl ?? null;
+    }
 
     const response = await fetch(apiUrl("/campaigns"), {
       method: "POST",
@@ -55,6 +96,7 @@ export default function CreatorDashboard() {
         reward_rate: Number(rate),
         total_budget: Number(budget),
         source_vod_url: sourceUrl,
+        thumbnail_url: thumbnailUrl,
         social_targets: targets,
         ai_rules: {
           face_check: checks.face,
@@ -176,6 +218,30 @@ export default function CreatorDashboard() {
                       placeholder="https://youtube.com/..."
                       required
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-serif font-light text-muted-foreground mb-2">Campaign Thumbnail</label>
+                    <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-6">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setThumbnailFile(e.target.files?.[0] ?? null)}
+                        className="block w-full text-sm text-muted-foreground file:mr-4 file:rounded-full file:border-0 file:bg-primary file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary-foreground hover:file:bg-primary/90"
+                      />
+                      {thumbnailPreviewUrl && (
+                        <div className="mt-4 overflow-hidden rounded-2xl border border-border">
+                          <img
+                            src={thumbnailPreviewUrl}
+                            alt="Campaign thumbnail preview"
+                            className="h-48 w-full object-cover"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Recommended: 4:3 or 16:9. This image appears on the discovery card.
+                    </p>
                   </div>
                 </div>
                 

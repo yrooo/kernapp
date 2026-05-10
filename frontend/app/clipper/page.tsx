@@ -35,7 +35,7 @@ type ClipState = {
 export default function ClipperDashboard() {
   const { session, walletAddress } = useSupabaseAuth();
   const searchParams = useSearchParams();
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [tiktokUrl, setTiktokUrl] = useState("");
   const [status, setStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -165,6 +165,9 @@ export default function ClipperDashboard() {
           containerClassName="max-w-5xl"
           actions={<SupabaseAuthButton className="!bg-primary hover:!bg-primary/90" />}
         />
+
+        <div className="max-w-5xl mx-auto w-full mb-8">
+        </div>
 
         <main className="max-w-5xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 gap-12">
           <section className="bg-card border border-border p-8 rounded-[48px] shadow-sm">

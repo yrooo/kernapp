@@ -1,10 +1,15 @@
+import json
 import os
 import uuid
-from datetime import datetime
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 from dotenv import load_dotenv
@@ -21,6 +26,8 @@ SUPABASE_KEY = (
     or os.environ.get("SUPABASE_PUBLISHABLE_KEY")
 )
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000")
+FRONTEND_PUBLIC_URL = os.environ.get("FRONTEND_PUBLIC_URL", "http://localhost:3000")
 AI_SCORE_THRESHOLD = float(os.environ.get("AI_SCORE_THRESHOLD", "0.85"))
 DEMO_AUTH_ENABLED = os.environ.get("DEMO_AUTH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
@@ -34,6 +41,41 @@ service_db: Optional[Client] = (
     else None
 )
 ALLOWED_SOCIAL_KEYS = {"tiktok", "instagram", "youtube"}
+OAUTH_PROVIDERS: Dict[str, Dict[str, Any]] = {
+    "youtube": {
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "client_id_env": "GOOGLE_CLIENT_ID",
+        "client_secret_env": "GOOGLE_CLIENT_SECRET",
+        "scopes": [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/youtube.readonly",
+        ],
+        "auth_params": {
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+        },
+    },
+    "instagram": {
+        "auth_url": "https://api.instagram.com/oauth/authorize",
+        "token_url": "https://api.instagram.com/oauth/access_token",
+        "client_id_env": "INSTAGRAM_CLIENT_ID",
+        "client_secret_env": "INSTAGRAM_CLIENT_SECRET",
+        "scopes": ["user_profile", "user_media"],
+    },
+    "tiktok": {
+        "auth_url": "https://www.tiktok.com/v2/auth/authorize/",
+        "token_url": "https://open.tiktokapis.com/v2/oauth/token/",
+        "client_id_env": "TIKTOK_CLIENT_KEY",
+        "client_secret_env": "TIKTOK_CLIENT_SECRET",
+        "scopes": ["user.info.basic", "video.list"],
+        "client_id_param": "client_key",
+        "client_secret_param": "client_secret",
+    },
+}
 
 
 def _get_attr(source: Any, key: str):
@@ -95,6 +137,134 @@ def get_user_db(user: Dict[str, Any]) -> Client:
         detail="DEMO_AUTH_ENABLED requires SUPABASE_SERVICE_ROLE_KEY for profile writes",
     )
 
+
+def get_oauth_config(provider: str) -> Dict[str, Any]:
+    if provider not in OAUTH_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    provider_config = OAUTH_PROVIDERS[provider]
+    client_id = os.environ.get(provider_config["client_id_env"])
+    client_secret = os.environ.get(provider_config["client_secret_env"])
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing OAuth env for {provider}. Set {provider_config['client_id_env']} and {provider_config['client_secret_env']}",
+        )
+
+    config = dict(provider_config)
+    config["client_id"] = client_id
+    config["client_secret"] = client_secret
+    config["redirect_uri"] = f"{BACKEND_PUBLIC_URL}/oauth/callback/{provider}"
+    return config
+
+
+def build_authorize_url(config: Dict[str, Any], state_id: str) -> str:
+    params = {
+        "client_id": config["client_id"],
+        "redirect_uri": config["redirect_uri"],
+        "response_type": "code",
+        "scope": " ".join(config.get("scopes", [])),
+        "state": state_id,
+    }
+    params.update(config.get("auth_params", {}))
+    return f"{config['auth_url']}?{urllib.parse.urlencode(params)}"
+
+
+def exchange_token(config: Dict[str, Any], code: str) -> Dict[str, Any]:
+    data = {
+        config.get("client_id_param", "client_id"): config["client_id"],
+        config.get("client_secret_param", "client_secret"): config["client_secret"],
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": config["redirect_uri"],
+    }
+    data.update(config.get("token_params", {}))
+
+    payload = urllib.parse.urlencode(data).encode("utf-8")
+    request = urllib.request.Request(
+        config["token_url"],
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8")
+        raise HTTPException(status_code=400, detail=f"Token exchange failed: {error_body}") from exc
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Token exchange returned invalid JSON") from exc
+
+
+def extract_provider_user_id(token_payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("user_id", "open_id", "sub", "id"):
+        value = token_payload.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def fetch_provider_profile(provider: str, access_token: str) -> Dict[str, Any]:
+    try:
+        if provider == "youtube":
+            request = urllib.request.Request(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        elif provider == "instagram":
+            params = urllib.parse.urlencode({"fields": "id,username", "access_token": access_token})
+            request = urllib.request.Request(f"https://graph.instagram.com/me?{params}")
+        elif provider == "tiktok":
+            params = urllib.parse.urlencode(
+                {"fields": "open_id,union_id,avatar_url,display_name,username"}
+            )
+            request = urllib.request.Request(
+                f"https://open.tiktokapis.com/v2/user/info/?{params}",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+        else:
+            return {}
+
+        with urllib.request.urlopen(request) as response:
+            body = response.read().decode("utf-8")
+        return json.loads(body)
+    except Exception as exc:
+        print(f"[OAuth] Failed to fetch {provider} profile: {exc}")
+        return {}
+
+
+def extract_profile_user_id(provider: str, profile_info: Dict[str, Any]) -> Optional[str]:
+    if not profile_info:
+        return None
+
+    if provider == "youtube":
+        return profile_info.get("sub")
+    if provider == "instagram":
+        return profile_info.get("id")
+    if provider == "tiktok":
+        user_info = profile_info.get("data", {}).get("user", {})
+        return user_info.get("open_id") or user_info.get("union_id")
+    return None
+
+
+def extract_provider_username(provider: str, profile_info: Dict[str, Any]) -> Optional[str]:
+    if not profile_info:
+        return None
+
+    if provider == "youtube":
+        return profile_info.get("name") or profile_info.get("email")
+    if provider == "instagram":
+        return profile_info.get("username")
+    if provider == "tiktok":
+        user_info = profile_info.get("data", {}).get("user", {})
+        return user_info.get("display_name") or user_info.get("username")
+    return None
+
 app = FastAPI(title="Kern Oracle Backend", description="AI Oracle for Clip-to-Earn Verification")
 
 app.add_middleware(
@@ -110,6 +280,7 @@ class CampaignCreate(BaseModel):
     reward_rate: float
     total_budget: float
     source_vod_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
     social_targets: list[str] = Field(default_factory=list)
     ai_rules: Dict[str, Any] = Field(default_factory=dict)
     soft_rules: Optional[str] = None
@@ -228,6 +399,29 @@ def get_me(user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Profile not found")
     return {"status": "success", "data": response.data}
 
+
+@app.get("/me/social-accounts")
+def get_social_accounts(user=Depends(get_current_user)):
+    user_db = get_user_db(user)
+    response = (
+        user_db.table("social_accounts")
+        .select("provider, provider_user_id, provider_username, scope, expires_at, updated_at")
+        .eq("profile_id", user["user_id"])
+        .execute()
+    )
+    return {"status": "success", "data": response.data or []}
+
+
+@app.delete("/me/social-accounts/{provider}")
+def delete_social_account(provider: str, user=Depends(get_current_user)):
+    provider = provider.lower()
+    if provider not in ALLOWED_SOCIAL_KEYS:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    user_db = get_user_db(user)
+    user_db.table("social_accounts").delete().eq("profile_id", user["user_id"]).eq("provider", provider).execute()
+    return {"status": "success"}
+
 @app.patch("/me")
 def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
     user_db = get_user_db(user)
@@ -265,6 +459,11 @@ def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
 
 @app.post("/me/link-social")
 def link_social(payload: SocialLinkRequest, user=Depends(get_current_user)):
+    return link_social_start(payload, user)
+
+
+@app.post("/me/link-social/start")
+def link_social_start(payload: SocialLinkRequest, user=Depends(get_current_user)):
     provider = payload.provider.lower()
     if provider not in ALLOWED_SOCIAL_KEYS:
         raise HTTPException(
@@ -272,12 +471,86 @@ def link_social(payload: SocialLinkRequest, user=Depends(get_current_user)):
             detail=f"Invalid provider. Must be one of: {', '.join(sorted(ALLOWED_SOCIAL_KEYS))}",
         )
 
-    return {
-        "status": "pending",
+    user_db = get_user_db(user)
+    config = get_oauth_config(provider)
+    state_id = str(uuid.uuid4())
+    user_db.table("oauth_states").insert(
+        {
+            "id": state_id,
+            "profile_id": user["user_id"],
+            "provider": provider,
+            "redirect_url": payload.redirect_url,
+        }
+    ).execute()
+
+    auth_url = build_authorize_url(config, state_id)
+    return {"status": "success", "provider": provider, "auth_url": auth_url}
+
+
+@app.get("/oauth/callback/{provider}")
+def oauth_callback(
+    provider: str,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+):
+    if error:
+        raise HTTPException(status_code=400, detail=error_description or error)
+
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code or state")
+
+    if service_db is None:
+        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY required for OAuth callback")
+
+    provider = provider.lower()
+    if provider not in ALLOWED_SOCIAL_KEYS:
+        raise HTTPException(status_code=400, detail="Unsupported provider")
+
+    config = get_oauth_config(provider)
+    state_response = service_db.table("oauth_states").select("*").eq("id", state).single().execute()
+    if not state_response.data:
+        raise HTTPException(status_code=400, detail="Invalid or expired state")
+
+    token_payload = exchange_token(config, code)
+    access_token = token_payload.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="OAuth token response missing access_token")
+
+    profile_info = fetch_provider_profile(provider, access_token)
+    provider_user_id = extract_provider_user_id(token_payload) or extract_profile_user_id(provider, profile_info)
+    provider_username = extract_provider_username(provider, profile_info)
+
+    expires_at = None
+    expires_in = token_payload.get("expires_in") or token_payload.get("expires_in_seconds")
+    if expires_in:
+        try:
+            expires_seconds = int(expires_in)
+            expires_at = (datetime.utcnow() + timedelta(seconds=expires_seconds)).isoformat()
+        except (TypeError, ValueError):
+            expires_at = None
+
+    account_payload = {
+        "profile_id": state_response.data["profile_id"],
         "provider": provider,
-        "message": "Auth0 social linking stub. Replace with real auth flow.",
-        "redirect_url": payload.redirect_url,
+        "provider_user_id": provider_user_id,
+        "provider_username": provider_username,
+        "access_token": access_token,
+        "refresh_token": token_payload.get("refresh_token"),
+        "expires_at": expires_at,
+        "scope": token_payload.get("scope"),
+        "metadata": profile_info,
+        "updated_at": datetime.utcnow().isoformat(),
     }
+
+    service_db.table("social_accounts").upsert(
+        account_payload, on_conflict="profile_id,provider"
+    ).execute()
+    service_db.table("oauth_states").delete().eq("id", state).execute()
+
+    redirect_url = state_response.data.get("redirect_url") or FRONTEND_PUBLIC_URL
+    return RedirectResponse(f"{redirect_url}?linked={provider}")
 
 @app.get("/me/payouts")
 def get_my_payouts(user=Depends(get_current_user)):
@@ -307,6 +580,7 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
         "title": payload.title,
         "vault_pda": payload.vault_pda,
         "source_vod_url": payload.source_vod_url,
+        "thumbnail_url": payload.thumbnail_url,
         "reward_rate": payload.reward_rate,
         "total_budget": payload.total_budget,
         "social_targets": payload.social_targets,
