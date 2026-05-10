@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Sidebar } from "@/components/sidebar";
-import { Menu, CheckCircle2, Circle, ArrowRight, ArrowLeft } from "lucide-react";
+import { CheckCircle2, Circle, ArrowRight, ArrowLeft } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
 import { SupabaseAuthButton } from "@/components/SupabaseAuthButton";
 import { useSupabaseAuth } from "@/components/WalletProvider";
 import { apiUrl, authHeaders } from "@/lib/backend";
@@ -95,20 +96,11 @@ export default function CreatorDashboard() {
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
       <div className="flex-1 flex flex-col h-screen overflow-y-auto p-8">
-        <header className="mb-12 flex justify-between items-center max-w-7xl mx-auto w-full">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsSidebarOpen(true)}
-              className="p-2 -ml-2 hover:bg-secondary rounded-full transition-colors text-foreground"
-            >
-              <Menu size={24} />
-            </button>
-            <span className="font-serif text-muted-foreground text-2xl hidden sm:inline">Creator</span>
-          </div>
-          <div className="flex items-center gap-6">
-            <SupabaseAuthButton className="!bg-primary hover:!bg-primary/90" />
-          </div>
-        </header>
+        <PageHeader
+          title="Creator"
+          onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+          actions={<SupabaseAuthButton className="!bg-primary hover:!bg-primary/90" />}
+        />
 
         <main className="max-w-3xl mx-auto w-full flex-1">
           <div className="flex justify-between items-center mb-12 relative">

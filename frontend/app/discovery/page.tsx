@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Menu, Users, CheckCircle2 } from "lucide-react";
+import { Users, CheckCircle2 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
 import { Sidebar } from "@/components/sidebar";
 import { apiUrl } from "@/lib/backend";
 import { SupabaseAuthButton } from "@/components/SupabaseAuthButton";
@@ -56,21 +57,12 @@ export default function DiscoveryPage() {
     <div className="min-h-screen bg-background font-sans flex overflow-hidden">
       <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
-      <div className="flex-1 flex flex-col h-screen overflow-y-auto p-8">
-        <header className="mb-12 flex justify-between items-center max-w-7xl mx-auto w-full">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsSidebarOpen(true)}
-              className="p-2 -ml-2 hover:bg-secondary rounded-full transition-colors text-foreground"
-            >
-              <Menu size={24} />
-            </button>
-            <span className="font-serif text-muted-foreground text-2xl hidden sm:inline">Discovery</span>
-          </div>
-          <div className="flex items-center gap-6">
-            <SupabaseAuthButton className="!bg-primary hover:!bg-primary/90" />
-          </div>
-        </header>
+     <div className="flex-1 flex flex-col h-screen overflow-y-auto p-8">
+        <PageHeader
+          title="Discovery"
+          onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+          actions={<SupabaseAuthButton className="!bg-primary hover:!bg-primary/90" />}
+        />
 
         <main className="max-w-7xl mx-auto w-full">
           <div className="flex items-end justify-between gap-4 mb-8">

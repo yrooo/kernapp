@@ -15,7 +15,12 @@ from scraper import scrape_video_metadata
 load_dotenv()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_KEY")
+    or os.environ.get("SUPABASE_ANON_KEY")
+    or os.environ.get("SUPABASE_PUBLISHABLE_KEY")
+)
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 AI_SCORE_THRESHOLD = float(os.environ.get("AI_SCORE_THRESHOLD", "0.85"))
 DEMO_AUTH_ENABLED = os.environ.get("DEMO_AUTH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
@@ -23,6 +28,11 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
 
 db: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+service_db: Optional[Client] = (
+    create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    if SUPABASE_SERVICE_ROLE_KEY
+    else None
+)
 ALLOWED_SOCIAL_KEYS = {"tiktok", "instagram", "youtube"}
 
 
@@ -62,6 +72,28 @@ def extract_wallet_address_from_user(user: Any) -> Optional[str]:
             return candidate
 
     return None
+
+
+def create_user_scoped_client(access_token: str) -> Client:
+    user_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    user_client.postgrest.auth(access_token)
+    return user_client
+
+
+def get_user_db(user: Dict[str, Any]) -> Client:
+    if user.get("auth_mode") == "supabase":
+        token = user.get("access_token")
+        if not token:
+            raise HTTPException(status_code=401, detail="Missing access token")
+        return create_user_scoped_client(token)
+
+    if service_db is not None:
+        return service_db
+
+    raise HTTPException(
+        status_code=500,
+        detail="DEMO_AUTH_ENABLED requires SUPABASE_SERVICE_ROLE_KEY for profile writes",
+    )
 
 app = FastAPI(title="Kern Oracle Backend", description="AI Oracle for Clip-to-Earn Verification")
 
@@ -115,6 +147,7 @@ def get_current_user(
     profile_wallet = wallet_address
     user_metadata: Dict[str, Any] = {}
     auth_mode = "demo"
+    token: Optional[str] = None
 
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
@@ -144,9 +177,22 @@ def get_current_user(
         "avatar_url": user_metadata.get("avatar_url"),
         "social_links": user_metadata.get("social_links", {}),
     }
-    db.table("profiles").upsert(profile_payload).execute()
+    if auth_mode == "supabase":
+        create_user_scoped_client(token).table("profiles").upsert(profile_payload).execute()
+    elif service_db is not None:
+        service_db.table("profiles").upsert(profile_payload).execute()
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="DEMO_AUTH_ENABLED requires SUPABASE_SERVICE_ROLE_KEY for profile writes",
+        )
 
-    return {"user_id": user_id, "wallet_address": profile_wallet, "auth_mode": auth_mode}
+    return {
+        "user_id": user_id,
+        "wallet_address": profile_wallet,
+        "auth_mode": auth_mode,
+        "access_token": token,
+    }
 
 def process_clip_background(clip_id: str, video_url: str, source_vod_url: Optional[str]):
     print(f"--- Starting background processing for clip {clip_id} ---")
@@ -176,13 +222,15 @@ def health_check():
 
 @app.get("/me")
 def get_me(user=Depends(get_current_user)):
-    response = db.table("profiles").select("*").eq("id", user["user_id"]).single().execute()
+    user_db = get_user_db(user)
+    response = user_db.table("profiles").select("*").eq("id", user["user_id"]).single().execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Profile not found")
     return {"status": "success", "data": response.data}
 
 @app.patch("/me")
 def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
+    user_db = get_user_db(user)
     updates: Dict[str, Any] = {}
     auth_updates: Dict[str, Any] = {}
     if payload.wallet_address is not None:
@@ -207,10 +255,10 @@ def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
     if not updates:
         raise HTTPException(status_code=400, detail="No profile updates provided")
 
-    response = db.table("profiles").update(updates).eq("id", user["user_id"]).execute()
+    response = user_db.table("profiles").update(updates).eq("id", user["user_id"]).execute()
     try:
-        if auth_updates and user.get("auth_mode") == "supabase":
-            db.auth.admin.update_user_by_id(user["user_id"], {"user_metadata": auth_updates})
+        if auth_updates and user.get("auth_mode") == "supabase" and service_db is not None:
+            service_db.auth.admin.update_user_by_id(user["user_id"], {"user_metadata": auth_updates})
     except Exception as exc:
         print(f"[Auth] Failed to sync user_metadata: {exc}")
     return {"status": "success", "data": response.data}
@@ -253,6 +301,7 @@ def get_my_payouts(user=Depends(get_current_user)):
 
 @app.post("/campaigns")
 def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
+    user_db = get_user_db(user)
     campaign = {
         "creator_id": user["user_id"],
         "title": payload.title,
@@ -266,7 +315,7 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
         "status": payload.status,
         "expires_at": payload.expires_at.isoformat() if payload.expires_at else None,
     }
-    response = db.table("campaigns").insert(campaign).execute()
+    response = user_db.table("campaigns").insert(campaign).execute()
     return {"status": "success", "data": response.data}
 
 @app.get("/campaigns")
@@ -286,26 +335,27 @@ def get_campaign(campaign_id: str):
 
 @app.get("/clips/{clip_id}")
 def get_clip(clip_id: str, user=Depends(get_current_user)):
-    clip_response = db.table("clips").select("*").eq("id", clip_id).single().execute()
+    user_db = get_user_db(user)
+    clip_response = user_db.table("clips").select("*").eq("id", clip_id).single().execute()
     if not clip_response.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
     clip = clip_response.data
     if clip.get("clipper_id") != user["user_id"]:
-        campaign_response = db.table("campaigns").select("creator_id").eq("id", clip["campaign_id"]).single().execute()
+        campaign_response = user_db.table("campaigns").select("creator_id").eq("id", clip["campaign_id"]).single().execute()
         if not campaign_response.data or campaign_response.data["creator_id"] != user["user_id"]:
             raise HTTPException(status_code=403, detail="Not authorized to view this clip")
 
     snapshots_response = (
-        db.table("view_snapshots")
+        user_db.table("view_snapshots")
         .select("*")
         .eq("clip_id", clip_id)
         .order("captured_at", desc=True)
         .limit(5)
         .execute()
     )
-    payouts_response = db.table("payouts").select("*").eq("clip_id", clip_id).execute()
-    dispute_response = db.table("disputes").select("*").eq("clip_id", clip_id).execute()
+    payouts_response = user_db.table("payouts").select("*").eq("clip_id", clip_id).execute()
+    dispute_response = user_db.table("disputes").select("*").eq("clip_id", clip_id).execute()
 
     return {
         "status": "success",
@@ -319,8 +369,9 @@ def get_clip(clip_id: str, user=Depends(get_current_user)):
 
 @app.post("/submit-clip")
 def submit_clip(submission: ClipSubmission, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    user_db = get_user_db(user)
     campaign_response = (
-        db.table("campaigns").select("id, source_vod_url").eq("id", submission.campaign_id).single().execute()
+        user_db.table("campaigns").select("id, source_vod_url").eq("id", submission.campaign_id).single().execute()
     )
     if not campaign_response.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -338,7 +389,7 @@ def submit_clip(submission: ClipSubmission, background_tasks: BackgroundTasks, u
         "ai_status": "pending",
         "status": "tracking",
     }
-    clip_response = db.table("clips").insert(clip_payload).execute()
+    clip_response = user_db.table("clips").insert(clip_payload).execute()
     clip_id = clip_response.data[0]["id"] if clip_response.data else str(uuid.uuid4())
 
     background_tasks.add_task(

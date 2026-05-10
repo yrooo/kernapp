@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { supabase } from "@/lib/supabase";
+import { apiUrl, authHeaders } from "@/lib/backend";
 
 type SupabaseAuthContextValue = {
   session: Session | null;
@@ -80,6 +81,32 @@ export function AppWalletProvider({ children }: { children: React.ReactNode }) {
   const walletAddress = extractWalletAddress(session?.user ?? null);
   const accessToken = session?.access_token ?? null;
   const user = session?.user ?? null;
+
+  useEffect(() => {
+    if (!accessToken || !walletAddress) return;
+
+    let cancelled = false;
+
+    async function ensureProfile() {
+      try {
+        await fetch(apiUrl("/me"), {
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(accessToken, walletAddress),
+          },
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to ensure profile:", error);
+        }
+      }
+    }
+
+    ensureProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, walletAddress]);
 
   async function signIn() {
     setLoading(true);

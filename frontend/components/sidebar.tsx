@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { X, Compass, PlusCircle } from "lucide-react";
+import { Compass, PlusCircle } from "lucide-react";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -27,13 +27,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
       >
         <div className="w-72"> {/* Fixed width wrapper to prevent content squishing during animation */}
           <div className="flex items-center justify-between p-8">
-            <h2 className="text-2xl font-serif font-bold tracking-tight text-foreground">Kern.</h2>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-secondary rounded-full transition-colors text-muted-foreground"
-            >
-              <X size={20} />
-            </button>
+            <Link href="/" className="text-2xl font-serif font-bold tracking-tight text-foreground">Kern.</Link>
           </div>
 
           <nav className="px-4 space-y-2">
