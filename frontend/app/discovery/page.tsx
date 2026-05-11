@@ -19,7 +19,6 @@ type Campaign = {
   total_budget: number;
   social_targets?: string[] | null;
   status: string;
-  expires_at?: string | null;
   ai_rules?: Record<string, unknown> | null;
   soft_rules?: string | null;
   created_at?: string | null;
@@ -159,9 +158,6 @@ export default function DiscoveryPage() {
                       </div>
 
                       <div className="flex items-center justify-between pt-2">
-                        <p className="text-xs text-muted-foreground">
-                          Expires {formatDate(campaign.expires_at)}
-                        </p>
                         <span className="text-xs font-bold text-primary opacity-0 group-hover:opacity-100 transition-opacity">View Details →</span>
                       </div>
                     </div>

@@ -21,7 +21,6 @@ type Campaign = {
   total_budget: number;
   social_targets?: string[] | null;
   status: string;
-  expires_at?: string | null;
   ai_rules?: Record<string, unknown> | null;
   soft_rules?: string | null;
   created_at?: string | null;
@@ -61,6 +60,10 @@ export default function CampaignDetailPage() {
   const router = useRouter();
 
   const handleJoin = async () => {
+    if (!campaign) {
+      alert("Campaign data is not available.");
+      return;
+    }
     setIsJoining(true);
     try {
       // 1. Check if user is logged in
@@ -233,10 +236,6 @@ export default function CampaignDetailPage() {
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-                  <div>
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Expires</p>
-                    <p className="text-sm font-medium text-foreground">{formatDate(campaign.expires_at)}</p>
-                  </div>
                   <div>
                     <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Reward Rate</p>
                     <p className="text-sm font-medium text-foreground">{campaign.reward_rate} SOL / 1k</p>

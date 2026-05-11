@@ -192,7 +192,7 @@ export default function CreatorDashboard() {
             {step === 1 && (
               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div>
-                  <h2 className="text-3xl font-serif mb-2 text-foreground">Step 1: The Thesis</h2>
+                  <h2 className="text-3xl font-serif mb-2 text-foreground">Step 1: Define Your Campaign</h2>
                   <p className="text-muted-foreground font-light font-serif">Define the core identity of your campaign.</p>
                 </div>
                 
@@ -273,7 +273,7 @@ export default function CreatorDashboard() {
             {step === 2 && (
               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                  <div>
-                  <h2 className="text-3xl font-serif mb-2 text-foreground">Step 2: The Mandate</h2>
+                  <h2 className="text-3xl font-serif mb-2 text-foreground">Step 2: Set Your Rules</h2>
                   <p className="text-muted-foreground font-light font-serif">Establish AI-verified hard rules and human-reviewed creative guidelines.</p>
                 </div>
 
@@ -330,7 +330,7 @@ export default function CreatorDashboard() {
             {step === 3 && (
               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div>
-                  <h2 className="text-3xl font-serif mb-2 text-foreground">Step 3: The Treasury</h2>
+                  <h2 className="text-3xl font-serif mb-2 text-foreground">Step 3: Fund Your Campaign</h2>
                   <p className="text-muted-foreground font-light font-serif">Fund the vault and set your reward rate.</p>
                 </div>
 
