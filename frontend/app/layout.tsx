@@ -4,6 +4,7 @@ import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AppWalletProvider } from "@/components/WalletProvider";
 import { cn } from "@/lib/utils";
+import { Toaster } from "@/components/ui/sonner"
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'})
 
@@ -25,7 +26,10 @@ export default function RootLayout({
     >
       <body>
         <AppWalletProvider>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider>
+            {children}
+            <Toaster />
+          </ThemeProvider>
         </AppWalletProvider>
       </body>
     </html>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import { useSupabaseAuth } from "@/components/WalletProvider";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
@@ -42,7 +43,7 @@ export function SupabaseAuthButton({ className }: SupabaseAuthButtonProps) {
       await signIn();
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "Failed to authenticate with Solana.");
+      toast.error(error instanceof Error ? error.message : "Failed to authenticate with Solana.");
     }
   };
 
@@ -52,7 +53,7 @@ export function SupabaseAuthButton({ className }: SupabaseAuthButtonProps) {
       await signOut();
     } catch (error) {
       console.error(error);
-      alert(error instanceof Error ? error.message : "Failed to sign out.");
+      toast.error(error instanceof Error ? error.message : "Failed to sign out.");
     }
   };
 

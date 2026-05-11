@@ -579,6 +579,53 @@ def link_social_start(payload: SocialLinkRequest, user=Depends(get_current_user)
             detail=f"Invalid provider. Must be one of: {', '.join(sorted(ALLOWED_SOCIAL_KEYS))}",
         )
 
+    # DEMO MODE: Fake social linking without OAuth
+    if DEMO_AUTH_ENABLED:
+        user_db = get_user_db(user)
+
+        # Generate fake but realistic looking data
+        fake_usernames = {
+            "youtube": f"@creator{user['wallet_address'][:6]}",
+            "tiktok": f"@tiktoker{user['wallet_address'][:6]}",
+            "instagram": f"@insta{user['wallet_address'][:6]}",
+        }
+
+        fake_user_ids = {
+            "youtube": f"UC{user['wallet_address'][:20]}",
+            "tiktok": user["wallet_address"][:16],
+            "instagram": user["wallet_address"][:12],
+        }
+
+        # Create fake social account
+        account_payload = {
+            "profile_id": user["user_id"],
+            "provider": provider,
+            "provider_user_id": fake_user_ids.get(
+                provider, user["wallet_address"][:12]
+            ),
+            "provider_username": fake_usernames.get(
+                provider, f"@user{user['wallet_address'][:6]}"
+            ),
+            "scope": "demo_scope",
+            "access_token": "demo_token_" + str(uuid.uuid4()),
+            "refresh_token": None,
+            "expires_at": (datetime.utcnow() + timedelta(days=365)).isoformat(),
+        }
+
+        user_db.table("social_accounts").upsert(
+            account_payload, on_conflict="profile_id,provider"
+        ).execute()
+
+        # Return success without OAuth flow
+        redirect_url = payload.redirect_url or FRONTEND_PUBLIC_URL
+        return {
+            "status": "success",
+            "provider": provider,
+            "auth_url": f"{redirect_url}?linked={provider}&demo=true",
+            "demo_mode": True,
+        }
+
+    # PRODUCTION MODE: Real OAuth flow
     user_db = get_user_db(user)
     config = get_oauth_config(provider)
     state_id = str(uuid.uuid4())

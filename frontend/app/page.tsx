@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { CTASection } from "@/components/ui/hero-dithering-card";
 import { supportEmail } from "@/lib/site";
+import { Reveal, StaggerChildren, StaggerItem } from "@/components/ui/reveal";
 
 type FeatureCard = {
   title: string;
@@ -114,25 +115,27 @@ const impactCards: ImpactCard[] = [
 export default function Page() {
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans">
-      <header className="w-full flex justify-between items-center px-8 py-6 max-w-7xl mx-auto">
-        <div className="font-serif text-3xl font-bold tracking-tight text-foreground">Kern.</div>
-        <nav className="flex items-center gap-6">
-          <Link
-            href="/discovery"
-            className="group relative inline-flex h-14 items-center justify-center gap-3 overflow-hidden rounded-full bg-primary px-12 text-base font-medium text-primary-foreground transition-all duration-300 hover:bg-primary/90 hover:scale-105 active:scale-95 hover:ring-4 hover:ring-primary/20"
-          >
-            <span className="relative z-10">Launch App</span>
-            <ArrowRight className="relative z-10 h-5 w-5 transition-transform duration-300 group-hover:translate-x-1" />
-          </Link>
-        </nav>
-      </header>
+      <Reveal>
+        <header className="w-full flex justify-between items-center px-8 py-6 max-w-7xl mx-auto">
+          <div className="font-serif text-3xl font-bold tracking-tight text-foreground">Kern.</div>
+          <nav className="flex items-center gap-6">
+            <Link
+              href="/discovery"
+              className="group relative inline-flex h-14 items-center justify-center gap-3 overflow-hidden rounded-full bg-primary px-12 text-base font-medium text-primary-foreground transition-all duration-300 hover:bg-primary/90 hover:scale-105 active:scale-95 hover:ring-4 hover:ring-primary/20"
+            >
+              <span className="relative z-10">Launch App</span>
+              <ArrowRight className="relative z-10 h-5 w-5 transition-transform duration-300 group-hover:translate-x-1" />
+            </Link>
+          </nav>
+        </header>
+      </Reveal>
 
       <main className="flex-1 pb-20">
         <CTASection />
 
-        <section className="px-4 pb-8 md:px-6">
-          <div className="mx-auto max-w-7xl rounded-[48px] border border-border bg-card/80 p-8 shadow-sm backdrop-blur-sm md:p-12">
-            <div className="max-w-3xl">
+        <section className="px-4 py-16 md:px-6 md:py-24">
+          <div className="mx-auto max-w-7xl rounded-[48px] border border-border bg-card/80 p-10 shadow-sm backdrop-blur-sm md:p-16">
+            <Reveal className="max-w-3xl">
               <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">What we built</p>
               <h2 className="mt-4 font-serif text-3xl font-medium tracking-tight text-foreground md:text-5xl">
                 A clip-to-earn protocol that settles trust automatically.
@@ -141,86 +144,86 @@ export default function Page() {
                 Kern connects creators, clippers, and an AI oracle inside one flow. Campaign budgets live in on-chain vaults, clips are
                 verified off-chain, and payouts move only when the rules are satisfied.
               </p>
-            </div>
+            </Reveal>
 
-            <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <StaggerChildren className="mt-12 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
               {featureCards.map((card) => (
-                <div key={card.title} className="rounded-[28px] border border-border bg-background/70 p-6 shadow-sm">
-                  <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <StaggerItem key={card.title} className="rounded-[32px] border border-border bg-background/70 p-8 shadow-sm">
+                  <div className="mb-6 inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
                     <card.icon className="h-6 w-6" />
                   </div>
                   <h3 className="font-serif text-2xl text-foreground">{card.title}</h3>
-                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
-                </div>
+                  <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{card.description}</p>
+                </StaggerItem>
               ))}
-            </div>
+            </StaggerChildren>
           </div>
         </section>
 
-        <section className="px-4 pb-8 md:px-6">
-          <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-[48px] border border-border bg-card p-8 shadow-sm md:p-12">
+        <section className="px-4 py-16 md:px-6 md:py-24">
+          <div className="mx-auto grid max-w-7xl gap-12 lg:grid-cols-[0.9fr_1.1fr]">
+            <Reveal className="rounded-[48px] border border-border bg-card p-10 shadow-sm md:p-16">
               <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">How it works</p>
               <h2 className="mt-4 font-serif text-3xl font-medium tracking-tight text-foreground md:text-5xl">
                 From campaign setup to settlement, the path is explicit.
               </h2>
-              <p className="mt-6 text-lg leading-relaxed text-muted-foreground">
+              <p className="mt-8 text-lg leading-relaxed text-muted-foreground">
                 We designed the product so creators can fund campaigns, clippers can submit work, and the backend can verify and settle
                 without manual coordination.
               </p>
-              <div className="mt-8 rounded-[32px] border border-border bg-background/70 p-6">
+              <div className="mt-10 rounded-[32px] border border-border bg-background/70 p-8">
                 <p className="text-sm uppercase tracking-[0.24em] text-muted-foreground">Built around</p>
-                <p className="mt-3 text-foreground">
+                <p className="mt-4 text-foreground leading-relaxed">
                   A default-to-pay model with a challenge window, so valid clips move quickly and bad submissions can still be disputed.
                 </p>
               </div>
-            </div>
+            </Reveal>
 
-            <div className="grid gap-4">
+            <StaggerChildren className="grid gap-6">
               {workflowSteps.map((step, index) => (
-                <div key={step.title} className="rounded-[32px] border border-border bg-card p-6 shadow-sm md:p-8">
-                  <div className="flex items-start gap-4">
+                <StaggerItem key={step.title} className="rounded-[32px] border border-border bg-card p-8 shadow-sm md:p-10">
+                  <div className="flex items-start gap-6">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary text-base font-semibold text-primary-foreground">
                       {String(index + 1).padStart(2, "0")}
                     </div>
                     <div>
                       <p className="text-xs uppercase tracking-[0.24em] text-muted-foreground">{step.label}</p>
-                      <h3 className="mt-1 font-serif text-2xl text-foreground">{step.title}</h3>
+                      <h3 className="mt-2 font-serif text-2xl text-foreground">{step.title}</h3>
                     </div>
                   </div>
-                  <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
-                </div>
+                  <p className="mt-6 text-sm leading-relaxed text-muted-foreground">{step.description}</p>
+                </StaggerItem>
               ))}
-            </div>
+            </StaggerChildren>
           </div>
         </section>
 
-        <section className="px-4 md:px-6">
-          <div className="mx-auto max-w-7xl rounded-[48px] bg-foreground px-8 py-10 text-background shadow-xl md:px-12 md:py-12">
-            <div className="grid gap-10 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-              <div>
+        <section className="px-4 py-16 md:px-6 md:py-24">
+          <div className="mx-auto max-w-7xl rounded-[48px] bg-foreground px-10 py-16 text-background shadow-xl md:px-20 md:py-24">
+            <div className="grid gap-16 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+              <Reveal>
                 <p className="text-xs uppercase tracking-[0.3em] text-background/70">Why it matters</p>
-                <h2 className="mt-4 font-serif text-3xl font-medium tracking-tight md:text-5xl">
+                <h2 className="mt-6 font-serif text-3xl font-medium tracking-tight md:text-6xl">
                   Kern turns creator operations into a measurable settlement system.
                 </h2>
-                <p className="mt-6 max-w-2xl text-lg leading-relaxed text-background/80">
+                <p className="mt-8 max-w-2xl text-lg leading-relaxed text-background/80 md:text-xl">
                   Instead of manually chasing clips, checking views, and negotiating payouts, the protocol codifies the workflow. That
                   gives creators predictable budgets, clippers clearer incentives, and the product a business model built on protocol fees
                   and vault yield.
                 </p>
-              </div>
+              </Reveal>
 
-              <div className="grid gap-4">
-                {impactCards.map((card) => (
-                  <div key={card.title} className="rounded-[28px] border border-background/15 bg-background/8 p-5">
+              <StaggerChildren className="grid gap-6">
+              {impactCards.map((card) => (
+                  <StaggerItem key={card.title} className="rounded-[32px] border border-background/15 bg-background/8 p-8 md:p-10">
                     <p className="text-xs uppercase tracking-[0.24em] text-background/70">{card.title}</p>
-                    <p className="mt-2 text-sm leading-relaxed text-background/90">{card.description}</p>
-                  </div>
+                    <p className="mt-4 text-sm leading-relaxed text-background/90">{card.description}</p>
+                  </StaggerItem>
                 ))}
-              </div>
+              </StaggerChildren>
             </div>
 
-            <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <Reveal delay={0.2} className="mt-16 flex flex-col gap-4 sm:flex-row sm:flex-wrap">
               <Link
                 href="/discovery"
                 className="group inline-flex items-center justify-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/90 hover:scale-[1.02] active:scale-[0.98]"
@@ -242,28 +245,30 @@ export default function Page() {
                 Start clipping
                 <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
               </Link>
-            </div>
+            </Reveal>
           </div>
         </section>
 
-        <footer className="px-4 pb-10 pt-6 md:px-6">
-          <div className="mx-auto flex max-w-7xl flex-col gap-4 border-t border-border pt-6 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
-            <p>
-              Kern is an alpha clip-to-earn protocol. Public legal pages are available for review and OAuth verification.
-            </p>
-            <div className="flex flex-wrap items-center gap-4">
-              <Link href="/terms" className="transition-colors hover:text-foreground">
-                Terms of Service
-              </Link>
-              <Link href="/privacy" className="transition-colors hover:text-foreground">
-                Privacy Policy
-              </Link>
-              <a href={`mailto:${supportEmail}`} className="transition-colors hover:text-foreground">
-                {supportEmail}
-              </a>
+        <Reveal delay={0.2}>
+          <footer className="px-4 pb-10 pt-6 md:px-6">
+            <div className="mx-auto flex max-w-7xl flex-col gap-4 border-t border-border pt-6 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
+              <p>
+                Kern is an alpha clip-to-earn protocol. Public legal pages are available for review and OAuth verification.
+              </p>
+              <div className="flex flex-wrap items-center gap-4">
+                <Link href="/terms" className="transition-colors hover:text-foreground">
+                  Terms of Service
+                </Link>
+                <Link href="/privacy" className="transition-colors hover:text-foreground">
+                  Privacy Policy
+                </Link>
+                <a href={`mailto:${supportEmail}`} className="transition-colors hover:text-foreground">
+                  {supportEmail}
+                </a>
+              </div>
             </div>
-          </div>
-        </footer>
+          </footer>
+        </Reveal>
       </main>
     </div>
   );
