@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { Buffer } from "buffer";
+import { Transaction } from "@solana/web3.js";
 import { Sidebar } from "@/components/sidebar";
 import { CheckCircle2, Circle, ArrowRight, ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
@@ -90,7 +92,8 @@ export default function CreatorDashboard() {
       thumbnailUrl = data?.publicUrl ?? null;
     }
 
-    const response = await fetch(apiUrl("/campaigns"), {
+    // Step 1: Prepare the unsigned transaction
+    const prepareResponse = await fetch(apiUrl("/campaigns/prepare"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -110,27 +113,94 @@ export default function CreatorDashboard() {
           duration: checks.duration,
         },
         soft_rules: customReq,
-        status: "active",
       }),
     });
 
-    const payload = await response.json();
-    setIsSubmitting(false);
-
-    if (!response.ok) {
-      setError(payload?.detail || "Failed to create campaign.");
+    if (!prepareResponse.ok) {
+      const payload = await prepareResponse.json();
+      setIsSubmitting(false);
+      setError(payload?.detail || "Failed to prepare campaign transaction.");
       return;
     }
 
-    const created = Array.isArray(payload.data) ? payload.data[0] : payload.data?.[0] ?? payload.data;
-    setCreatedCampaign({
-      id: created?.id ?? payload?.data?.[0]?.id ?? "unknown",
-      title: created?.title ?? title,
-      vaultPda: created?.vault_pda ?? "unknown",
-      chainTxSignature: created?.chain_tx_signature ?? "unknown",
-      chainStatus: created?.chain_status ?? "unknown",
-      chainCluster: created?.chain_cluster ?? "unknown",
-    });
+    const prepareData = await prepareResponse.json();
+    const { signed_transaction: unsignedTxBase64, campaign_pda, bump, program_id, campaign_seed } = prepareData.data;
+
+    // Step 2: Sign the transaction with Phantom wallet
+    try {
+      const phantom = (window as any).solana;
+      if (!phantom || !phantom.isConnected) {
+        throw new Error("Phantom wallet not connected. Please connect your wallet first.");
+      }
+
+      // Convert base64 to a Transaction and let Phantom sign it
+      const txBytes = Uint8Array.from(Buffer.from(unsignedTxBase64, "base64"));
+      const transaction = Transaction.from(txBytes);
+      const signedTransaction = await phantom.signTransaction(transaction);
+
+      // Some wallet providers mutate the original transaction and return a plain object.
+      const serialized =
+        signedTransaction && typeof signedTransaction.serialize === "function"
+          ? signedTransaction.serialize()
+          : transaction.serialize();
+
+      // Serialize the signed transaction back to base64 for the backend
+      const signedTxBase64 = Buffer.from(serialized).toString("base64");
+
+      // Step 3: Submit the signed transaction
+      const submitResponse = await fetch(apiUrl("/campaigns/submit"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(session?.access_token, walletAddress),
+        },
+        body: JSON.stringify({
+          signed_transaction: signedTxBase64,
+          campaign_metadata: {
+            title,
+            reward_rate: Number(rate),
+            total_budget: Number(budget),
+            source_vod_url: sourceUrl,
+            thumbnail_url: thumbnailUrl,
+            social_targets: targets,
+            ai_rules: {
+              face_check: checks.face,
+              audio_match: checks.audio,
+              subtitles: checks.subtitles,
+              duration: checks.duration,
+            },
+            soft_rules: customReq,
+            vault_pda: campaign_pda,
+            campaign_seed,
+            program_id,
+            cluster: "devnet",
+          },
+        }),
+      });
+
+      const submitData = await submitResponse.json();
+      setIsSubmitting(false);
+
+      if (!submitResponse.ok) {
+        setError(submitData?.detail || "Failed to submit campaign.");
+        return;
+      }
+
+      const created = Array.isArray(submitData.data) ? submitData.data[0] : submitData.data?.[0] ?? submitData.data;
+      setCreatedCampaign({
+        id: created?.id ?? "unknown",
+        title: created?.title ?? title,
+        vaultPda: created?.vault_pda ?? campaign_pda,
+        chainTxSignature: created?.chain_tx_signature ?? "pending",
+        chainStatus: created?.chain_status ?? "active",
+        chainCluster: created?.chain_cluster ?? "devnet",
+      });
+    } catch (err) {
+      setIsSubmitting(false);
+      const message = err instanceof Error ? err.message : "Failed to sign transaction with wallet.";
+      setError(message);
+      return;
+    }
   };
 
   const toggleTarget = (target: string) => {

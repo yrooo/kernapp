@@ -22,6 +22,8 @@ from solana_chain import (
     generate_campaign_seed,
     send_initialize_campaign,
     sol_to_lamports,
+    build_unsigned_campaign_transaction,
+    submit_signed_transaction,
 )
 
 load_dotenv()
@@ -327,6 +329,20 @@ class SocialLinkRequest(BaseModel):
     provider: str
     redirect_url: Optional[str] = None
 
+class CampaignPrepare(BaseModel):
+    title: str
+    reward_rate: float
+    total_budget: float
+    source_vod_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    social_targets: List[str] = Field(default_factory=list)
+    ai_rules: Dict[str, Any] = Field(default_factory=dict)
+    soft_rules: Optional[str] = None
+
+class CampaignSubmit(BaseModel):
+    signed_transaction: str  # base64-encoded signed transaction
+    campaign_metadata: Dict[str, Any]  # campaign details to store
+
 def get_current_user(
     authorization: Optional[str] = Header(default=None),
     wallet_address: Optional[str] = Header(default=None, alias="x-wallet-address"),
@@ -589,6 +605,78 @@ def get_my_payouts(user=Depends(get_current_user)):
             "total_paid": total_paid,
         },
     }
+
+@app.post("/campaigns/prepare")
+def prepare_campaign(payload: CampaignPrepare, user=Depends(get_current_user)):
+    """
+    Prepare an unsigned transaction for campaign creation.
+    Creator will sign this with their wallet and submit it back.
+    """
+    creator_wallet = user["wallet_address"]
+
+    if payload.reward_rate <= 0 or payload.total_budget <= 0:
+        raise HTTPException(status_code=400, detail="Budget and reward rate must be greater than zero")
+
+    campaign_seed = generate_campaign_seed()
+    budget_lamports = sol_to_lamports(payload.total_budget)
+    rate_lamports = sol_to_lamports(payload.reward_rate)
+
+    try:
+        serialized_tx, campaign_pda, bump, program_id = build_unsigned_campaign_transaction(
+            creator_wallet=creator_wallet,
+            seed=campaign_seed,
+            budget_lamports=budget_lamports,
+            rate_per_1k_lamports=rate_lamports,
+        )
+    except ChainIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {
+        "status": "success",
+        "data": {
+            "signed_transaction": serialized_tx,
+            "campaign_pda": campaign_pda,
+            "bump": bump,
+            "program_id": program_id,
+            "campaign_seed": campaign_seed,
+        }
+    }
+
+@app.post("/campaigns/submit")
+def submit_campaign(payload: CampaignSubmit, user=Depends(get_current_user)):
+    """
+    Submit a signed transaction for campaign creation.
+    """
+    user_db = get_user_db(user)
+    creator_wallet = user["wallet_address"]
+
+    try:
+        signature = submit_signed_transaction(payload.signed_transaction)
+    except ChainIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Extract metadata from the submitted data
+    metadata = payload.campaign_metadata
+    campaign = {
+        "creator_id": user["user_id"],
+        "title": metadata.get("title"),
+        "vault_pda": metadata.get("vault_pda"),
+        "chain_campaign_seed": metadata.get("campaign_seed"),
+        "chain_program_id": metadata.get("program_id"),
+        "chain_tx_signature": signature,
+        "chain_cluster": metadata.get("cluster", "devnet"),
+        "chain_status": "active",
+        "source_vod_url": metadata.get("source_vod_url"),
+        "thumbnail_url": metadata.get("thumbnail_url"),
+        "reward_rate": metadata.get("reward_rate"),
+        "total_budget": metadata.get("total_budget"),
+        "social_targets": metadata.get("social_targets", []),
+        "ai_rules": metadata.get("ai_rules", {}),
+        "soft_rules": metadata.get("soft_rules"),
+        "status": "active",
+    }
+    response = user_db.table("campaigns").insert(campaign).execute()
+    return {"status": "success", "data": response.data}
 
 @app.post("/campaigns")
 def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):

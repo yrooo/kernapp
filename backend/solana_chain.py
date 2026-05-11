@@ -6,12 +6,13 @@ import os
 import secrets
 import struct
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from solana.rpc.api import Client
 from solders.instruction import AccountMeta, Instruction
 from solders.keypair import Keypair
+from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.transaction import Transaction
 
@@ -43,7 +44,9 @@ def get_rpc_url() -> str:
 def get_program_id() -> Pubkey:
     program_id = os.environ.get("KERN_PROGRAM_ID")
     if not program_id:
-        raise ChainIntegrationError("KERN_PROGRAM_ID is required for devnet Solana transactions")
+        raise ChainIntegrationError(
+            "KERN_PROGRAM_ID is required for devnet Solana transactions"
+        )
     return Pubkey.from_string(program_id)
 
 
@@ -55,22 +58,39 @@ def get_platform_treasury() -> Pubkey:
     return Pubkey.from_string(treasury)
 
 
+def get_oracle_authority_pubkey() -> Pubkey:
+    oracle = os.environ.get("KERN_ORACLE_PUBKEY")
+    if oracle:
+        return Pubkey.from_string(oracle)
+    return load_authority_keypair().pubkey()
+
+
 def load_authority_keypair() -> Keypair:
-    keypair_path = os.environ.get("KERN_SOLANA_KEYPAIR_PATH") or os.environ.get("SOLANA_KEYPAIR_PATH")
+    keypair_path = os.environ.get("KERN_SOLANA_KEYPAIR_PATH") or os.environ.get(
+        "SOLANA_KEYPAIR_PATH"
+    )
     if not keypair_path:
         keypair_path = str(Path.home() / ".config" / "solana" / "id.json")
 
     try:
-        secret_key = json.loads(Path(keypair_path).expanduser().read_text(encoding="utf-8"))
+        secret_key = json.loads(
+            Path(keypair_path).expanduser().read_text(encoding="utf-8")
+        )
     except FileNotFoundError as exc:
-        raise ChainIntegrationError(f"Solana keypair file not found: {keypair_path}") from exc
+        raise ChainIntegrationError(
+            f"Solana keypair file not found: {keypair_path}"
+        ) from exc
     except json.JSONDecodeError as exc:
-        raise ChainIntegrationError(f"Invalid Solana keypair JSON in {keypair_path}") from exc
+        raise ChainIntegrationError(
+            f"Invalid Solana keypair JSON in {keypair_path}"
+        ) from exc
 
     try:
         return Keypair.from_bytes(bytes(secret_key))
     except Exception as exc:  # pragma: no cover - defensive conversion guard
-        raise ChainIntegrationError(f"Unable to load Solana keypair from {keypair_path}") from exc
+        raise ChainIntegrationError(
+            f"Unable to load Solana keypair from {keypair_path}"
+        ) from exc
 
 
 def get_rpc_client() -> Client:
@@ -121,7 +141,9 @@ def _send_instruction(instruction: Instruction) -> str:
     blockhash_response = client.get_latest_blockhash()
     blockhash = blockhash_response.value.blockhash
 
-    transaction = Transaction.new_signed_with_payer([instruction], payer.pubkey(), [payer], blockhash)
+    transaction = Transaction.new_signed_with_payer(
+        [instruction], payer.pubkey(), [payer], blockhash
+    )
     result = client.send_transaction(transaction)
     signature = result.value
     return str(signature)
@@ -133,18 +155,27 @@ def build_initialize_campaign_instruction(
     budget_lamports: int,
     rate_per_1k_lamports: int,
     program_id: Pubkey | None = None,
+    payer_wallet: str | None = None,
+    oracle_authority_wallet: str | None = None,
 ) -> tuple[Instruction, str, int, Pubkey]:
-    creator = Pubkey.from_string(creator_wallet)
+    creator_pubkey = Pubkey.from_string(creator_wallet)
     resolved_program_id = program_id or get_program_id()
     campaign_pda, bump = derive_campaign_pda(creator_wallet, seed, resolved_program_id)
     campaign_pubkey = Pubkey.from_string(campaign_pda)
-    payer = load_authority_keypair()
+
+    if payer_wallet and payer_wallet != creator_wallet:
+        raise ChainIntegrationError("Initialize campaign requires creator as payer.")
+
+    payer_pubkey = creator_pubkey
+    if oracle_authority_wallet:
+        oracle_authority = Pubkey.from_string(oracle_authority_wallet)
+    else:
+        oracle_authority = get_oracle_authority_pubkey()
     platform_treasury = get_platform_treasury()
 
     data = b"".join(
         [
             _anchor_discriminator("initialize_campaign"),
-            bytes(creator),
             struct.pack("<Q", seed),
             struct.pack("<Q", budget_lamports),
             struct.pack("<Q", rate_per_1k_lamports),
@@ -156,7 +187,8 @@ def build_initialize_campaign_instruction(
         data,
         [
             AccountMeta(campaign_pubkey, False, True),
-            AccountMeta(payer.pubkey(), True, True),
+            AccountMeta(payer_pubkey, True, True),
+            AccountMeta(oracle_authority, False, False),
             AccountMeta(platform_treasury, False, True),
             AccountMeta(SYSTEM_PROGRAM_ID, False, False),
         ],
@@ -202,6 +234,71 @@ def build_execute_payout_instruction(
         ],
     )
     return instruction, campaign_pda, resolved_program_id
+
+
+def build_unsigned_campaign_transaction(
+    creator_wallet: str,
+    seed: int,
+    budget_lamports: int,
+    rate_per_1k_lamports: int,
+) -> tuple[str, str, int, str]:
+    """
+    Build an unsigned transaction for campaign initialization.
+    Returns: (serialized_tx_base64, campaign_pda, bump, program_id)
+
+    Creator will sign this transaction with their wallet and submit it back.
+    The creator is the payer, not the backend.
+    """
+    import base64
+
+    # Pass creator_wallet as payer_wallet so we don't need to load backend keypair
+    oracle_wallet = os.environ.get("KERN_ORACLE_PUBKEY") or creator_wallet
+    instruction, campaign_pda, bump, program_id = build_initialize_campaign_instruction(
+        creator_wallet=creator_wallet,
+        seed=seed,
+        budget_lamports=budget_lamports,
+        rate_per_1k_lamports=rate_per_1k_lamports,
+        payer_wallet=creator_wallet,  # Creator is the payer for their own transaction
+        oracle_authority_wallet=oracle_wallet,
+    )
+
+    client = get_rpc_client()
+    blockhash_response = client.get_latest_blockhash()
+    blockhash = blockhash_response.value.blockhash
+
+    # Build transaction without signing (creator will sign it)
+    payer_pubkey = Pubkey.from_string(creator_wallet)
+    message = Message.new_with_blockhash([instruction], payer_pubkey, blockhash)
+    transaction = Transaction.new_unsigned(message)
+
+    # Serialize to base64 so frontend can deserialize and sign
+    serialized = base64.b64encode(bytes(transaction)).decode("utf-8")
+
+    return serialized, campaign_pda, bump, str(program_id)
+
+
+def submit_signed_transaction(signed_tx_base64: str) -> str:
+    """
+    Submit a transaction that has already been signed by the creator.
+    Returns: transaction signature
+    """
+    import base64
+
+    try:
+        tx_bytes = base64.b64decode(signed_tx_base64)
+        transaction = Transaction.from_bytes(tx_bytes)
+    except Exception as exc:
+        raise ChainIntegrationError(
+            f"Failed to deserialize transaction: {exc}"
+        ) from exc
+
+    client = get_rpc_client()
+    try:
+        result = client.send_transaction(transaction)
+        signature = result.value
+        return str(signature)
+    except Exception as exc:
+        raise ChainIntegrationError(f"Failed to submit transaction: {exc}") from exc
 
 
 def send_initialize_campaign(
