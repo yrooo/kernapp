@@ -47,6 +47,14 @@ def get_program_id() -> Pubkey:
     return Pubkey.from_string(program_id)
 
 
+def get_platform_treasury() -> Pubkey:
+    treasury = os.environ.get("KERN_TREASURY_PUBKEY")
+    if not treasury:
+        # Fallback treasury for dev/hackathon purposes
+        return Pubkey.from_string("11111111111111111111111111111111")
+    return Pubkey.from_string(treasury)
+
+
 def load_authority_keypair() -> Keypair:
     keypair_path = os.environ.get("KERN_SOLANA_KEYPAIR_PATH") or os.environ.get("SOLANA_KEYPAIR_PATH")
     if not keypair_path:
@@ -124,7 +132,6 @@ def build_initialize_campaign_instruction(
     seed: int,
     budget_lamports: int,
     rate_per_1k_lamports: int,
-    expiry_ts: int,
     program_id: Pubkey | None = None,
 ) -> tuple[Instruction, str, int, Pubkey]:
     creator = Pubkey.from_string(creator_wallet)
@@ -132,6 +139,7 @@ def build_initialize_campaign_instruction(
     campaign_pda, bump = derive_campaign_pda(creator_wallet, seed, resolved_program_id)
     campaign_pubkey = Pubkey.from_string(campaign_pda)
     payer = load_authority_keypair()
+    platform_treasury = get_platform_treasury()
 
     data = b"".join(
         [
@@ -140,7 +148,6 @@ def build_initialize_campaign_instruction(
             struct.pack("<Q", seed),
             struct.pack("<Q", budget_lamports),
             struct.pack("<Q", rate_per_1k_lamports),
-            struct.pack("<q", expiry_ts),
         ]
     )
 
@@ -150,6 +157,7 @@ def build_initialize_campaign_instruction(
         [
             AccountMeta(campaign_pubkey, False, True),
             AccountMeta(payer.pubkey(), True, True),
+            AccountMeta(platform_treasury, False, True),
             AccountMeta(SYSTEM_PROGRAM_ID, False, False),
         ],
     )
@@ -173,6 +181,7 @@ def build_execute_payout_instruction(
     campaign_pubkey = Pubkey.from_string(campaign_pda)
     clipper_pubkey = Pubkey.from_string(clipper_wallet)
     payer = load_authority_keypair()
+    platform_treasury = get_platform_treasury()
 
     data = b"".join(
         [
@@ -188,6 +197,7 @@ def build_execute_payout_instruction(
             AccountMeta(campaign_pubkey, False, True),
             AccountMeta(payer.pubkey(), True, True),
             AccountMeta(clipper_pubkey, False, True),
+            AccountMeta(platform_treasury, False, True),
             AccountMeta(SYSTEM_PROGRAM_ID, False, False),
         ],
     )
@@ -199,14 +209,12 @@ def send_initialize_campaign(
     seed: int,
     budget_lamports: int,
     rate_per_1k_lamports: int,
-    expiry_ts: int,
 ) -> CampaignChainTx:
     instruction, campaign_pda, bump, program_id = build_initialize_campaign_instruction(
         creator_wallet=creator_wallet,
         seed=seed,
         budget_lamports=budget_lamports,
         rate_per_1k_lamports=rate_per_1k_lamports,
-        expiry_ts=expiry_ts,
     )
     signature = _send_instruction(instruction)
     return CampaignChainTx(

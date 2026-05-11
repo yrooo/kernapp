@@ -44,7 +44,6 @@ export default function CreatorDashboard() {
   
   const [budget, setBudget] = useState("");
   const [rate, setRate] = useState("");
-  const [expiry, setExpiry] = useState("");
 
   const THUMBNAIL_BUCKET = "campaign-thumbnails";
 
@@ -112,7 +111,6 @@ export default function CreatorDashboard() {
         },
         soft_rules: customReq,
         status: "active",
-        expires_at: expiry ? new Date(expiry).toISOString() : null,
       }),
     });
 
@@ -361,17 +359,6 @@ export default function CreatorDashboard() {
                         required
                       />
                     </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-serif font-light text-muted-foreground mb-2">The "Cliff" (Expiry Date)</label>
-                    <input 
-                      type="date" 
-                      value={expiry}
-                      onChange={(e) => setExpiry(e.target.value)}
-                      className="w-full bg-background border border-border rounded-2xl px-4 py-4 text-foreground focus:ring-2 focus:ring-primary/20 outline-none transition-all font-sans" 
-                      required
-                    />
                   </div>
                   
                   {/* The Live Math & Trust Signal */}

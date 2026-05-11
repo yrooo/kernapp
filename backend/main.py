@@ -5,7 +5,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,6 +92,17 @@ def _get_attr(source: Any, key: str):
     return getattr(source, key, None)
 
 
+def clean_wallet_address(address: str) -> str:
+    if not address:
+        return address
+    # Common prefixes from Supabase/Auth providers (e.g. "web3:solana:ADDRESS")
+    prefixes = ["web3:solana:", "web3:ethereum:", "web3:base:", "web3:"]
+    for prefix in prefixes:
+        if address.lower().startswith(prefix):
+            return address[len(prefix):]
+    return address
+
+
 def extract_wallet_address_from_user(user: Any) -> Optional[str]:
     user_metadata = _get_attr(user, "user_metadata") or _get_attr(user, "raw_user_meta_data") or {}
     identities = _get_attr(user, "identities") or []
@@ -118,7 +129,7 @@ def extract_wallet_address_from_user(user: Any) -> Optional[str]:
 
     for candidate in candidates:
         if isinstance(candidate, str) and candidate:
-            return candidate
+            return clean_wallet_address(candidate)
 
     return None
 
@@ -283,16 +294,14 @@ app.add_middleware(
 
 class CampaignCreate(BaseModel):
     title: str
-    vault_pda: Optional[str] = None
     reward_rate: float
     total_budget: float
     source_vod_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
-    social_targets: list[str] = Field(default_factory=list)
+    social_targets: List[str] = Field(default_factory=list)
     ai_rules: Dict[str, Any] = Field(default_factory=dict)
     soft_rules: Optional[str] = None
-    status: str = "draft"
-    expires_at: Optional[datetime] = None
+    status: str = "active"
 
 class ClipSubmission(BaseModel):
     campaign_id: str
@@ -344,6 +353,8 @@ def get_current_user(
         user_id = str(uuid.uuid5(uuid.NAMESPACE_URL, profile_wallet))
     else:
         raise HTTPException(status_code=401, detail="Missing Bearer token")
+
+    profile_wallet = clean_wallet_address(profile_wallet)
 
     if not profile_wallet:
         raise HTTPException(status_code=400, detail="Wallet address required")
@@ -588,24 +599,15 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Budget and reward rate must be greater than zero")
 
     campaign_seed = generate_campaign_seed()
-    expires_at = payload.expires_at
-    if expires_at is None:
-        raise HTTPException(status_code=400, detail="Expiry date is required")
-
     budget_lamports = sol_to_lamports(payload.total_budget)
     rate_lamports = sol_to_lamports(payload.reward_rate)
 
     try:
-        vault_pda, _ = derive_campaign_pda(creator_wallet, campaign_seed)
-        if payload.vault_pda and payload.vault_pda != vault_pda:
-            raise HTTPException(status_code=400, detail="Vault PDA does not match the derived Solana address")
-
         chain_tx = send_initialize_campaign(
             creator_wallet=creator_wallet,
             seed=campaign_seed,
             budget_lamports=budget_lamports,
             rate_per_1k_lamports=rate_lamports,
-            expiry_ts=int(expires_at.timestamp()),
         )
     except ChainIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -627,7 +629,6 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
         "ai_rules": payload.ai_rules,
         "soft_rules": payload.soft_rules,
         "status": "active",
-        "expires_at": expires_at.isoformat(),
     }
     response = user_db.table("campaigns").insert(campaign).execute()
     return {"status": "success", "data": response.data}
@@ -639,6 +640,41 @@ def list_campaigns(status: Optional[str] = None):
         query = query.eq("status", status)
     response = query.execute()
     return {"status": "success", "data": response.data}
+
+@app.post("/campaigns/{campaign_id}/join")
+def join_campaign(campaign_id: str, user=Depends(get_current_user)):
+    user_db = get_user_db(user)
+    
+    # Check if campaign exists
+    campaign_response = user_db.table("campaigns").select("id").eq("id", campaign_id).single().execute()
+    if not campaign_response.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    participant_payload = {
+        "campaign_id": campaign_id,
+        "clipper_id": user["user_id"]
+    }
+    
+    try:
+        response = user_db.table("campaign_participants").upsert(participant_payload, on_conflict="campaign_id,clipper_id").execute()
+        return {"status": "success", "data": response.data}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to join campaign: {str(exc)}")
+
+@app.get("/me/joined-campaigns")
+def get_joined_campaigns(user=Depends(get_current_user)):
+    user_db = get_user_db(user)
+    
+    # Get campaign IDs from participants table
+    participants_response = user_db.table("campaign_participants").select("campaign_id").eq("clipper_id", user["user_id"]).execute()
+    campaign_ids = [p["campaign_id"] for p in (participants_response.data or [])]
+    
+    if not campaign_ids:
+        return {"status": "success", "data": []}
+        
+    # Get full campaign details
+    campaigns_response = user_db.table("campaigns").select("*").in_("id", campaign_ids).execute()
+    return {"status": "success", "data": campaigns_response.data or []}
 
 @app.get("/campaigns/{campaign_id}")
 def get_campaign(campaign_id: str):

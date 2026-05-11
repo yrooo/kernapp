@@ -59,7 +59,6 @@ CREATE TABLE campaigns (
     ai_rules JSONB DEFAULT '{}'::jsonb,
     soft_rules TEXT,
     status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'funding', 'active', 'completed')),
-    expires_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

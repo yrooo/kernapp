@@ -5,6 +5,7 @@ import type { Session, User } from "@supabase/supabase-js";
 
 import { supabase } from "@/lib/supabase";
 import { apiUrl, authHeaders } from "@/lib/backend";
+import { cleanWalletAddress } from "@/lib/utils";
 
 type SupabaseAuthContextValue = {
   session: Session | null;
@@ -40,7 +41,7 @@ function extractWalletAddress(user: User | null) {
   ];
 
   const walletAddress = candidates.find((value) => typeof value === "string" && value.length > 0);
-  return typeof walletAddress === "string" ? walletAddress : null;
+  return typeof walletAddress === "string" ? cleanWalletAddress(walletAddress) : null;
 }
 
 export function AppWalletProvider({ children }: { children: React.ReactNode }) {
