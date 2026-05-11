@@ -1,30 +1,29 @@
 import json
 import os
-import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
-from supabase import Client, create_client
-from dotenv import load_dotenv
-
 from oracle import verify_clip_originality
+from pydantic import BaseModel, Field
 from scraper import scrape_video_metadata
 from solana_chain import (
     ChainIntegrationError,
+    build_unsigned_campaign_transaction,
     derive_campaign_pda,
     generate_campaign_seed,
     send_initialize_campaign,
     sol_to_lamports,
-    build_unsigned_campaign_transaction,
     submit_signed_transaction,
 )
+from supabase import Client, create_client
 
 load_dotenv()
 
@@ -38,7 +37,12 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 BACKEND_PUBLIC_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://127.0.0.1:8000")
 FRONTEND_PUBLIC_URL = os.environ.get("FRONTEND_PUBLIC_URL", "http://localhost:3000")
 AI_SCORE_THRESHOLD = float(os.environ.get("AI_SCORE_THRESHOLD", "0.85"))
-DEMO_AUTH_ENABLED = os.environ.get("DEMO_AUTH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+DEMO_AUTH_ENABLED = os.environ.get("DEMO_AUTH_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
@@ -101,18 +105,20 @@ def clean_wallet_address(address: str) -> str:
     prefixes = ["web3:solana:", "web3:ethereum:", "web3:base:", "web3:"]
     for prefix in prefixes:
         if address.lower().startswith(prefix):
-            return address[len(prefix):]
+            return address[len(prefix) :]
     return address
 
 
 def extract_wallet_address_from_user(user: Any) -> Optional[str]:
-    user_metadata = _get_attr(user, "user_metadata") or _get_attr(user, "raw_user_meta_data") or {}
+    user_metadata = (
+        _get_attr(user, "user_metadata") or _get_attr(user, "raw_user_meta_data") or {}
+    )
     identities = _get_attr(user, "identities") or []
     identity_data = {}
 
     if identities:
-      first_identity = identities[0]
-      identity_data = _get_attr(first_identity, "identity_data") or {}
+        first_identity = identities[0]
+        identity_data = _get_attr(first_identity, "identity_data") or {}
 
     candidates = [
         user_metadata.get("wallet_address"),
@@ -213,12 +219,16 @@ def exchange_token(config: Dict[str, Any], code: str) -> Dict[str, Any]:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8")
-        raise HTTPException(status_code=400, detail=f"Token exchange failed: {error_body}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Token exchange failed: {error_body}"
+        ) from exc
 
     try:
         return json.loads(body)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="Token exchange returned invalid JSON") from exc
+        raise HTTPException(
+            status_code=400, detail="Token exchange returned invalid JSON"
+        ) from exc
 
 
 def extract_provider_user_id(token_payload: Dict[str, Any]) -> Optional[str]:
@@ -237,7 +247,9 @@ def fetch_provider_profile(provider: str, access_token: str) -> Dict[str, Any]:
                 headers={"Authorization": f"Bearer {access_token}"},
             )
         elif provider == "instagram":
-            params = urllib.parse.urlencode({"fields": "id,username", "access_token": access_token})
+            params = urllib.parse.urlencode(
+                {"fields": "id,username", "access_token": access_token}
+            )
             request = urllib.request.Request(f"https://graph.instagram.com/me?{params}")
         elif provider == "tiktok":
             params = urllib.parse.urlencode(
@@ -258,7 +270,9 @@ def fetch_provider_profile(provider: str, access_token: str) -> Dict[str, Any]:
         return {}
 
 
-def extract_profile_user_id(provider: str, profile_info: Dict[str, Any]) -> Optional[str]:
+def extract_profile_user_id(
+    provider: str, profile_info: Dict[str, Any]
+) -> Optional[str]:
     if not profile_info:
         return None
 
@@ -272,7 +286,9 @@ def extract_profile_user_id(provider: str, profile_info: Dict[str, Any]) -> Opti
     return None
 
 
-def extract_provider_username(provider: str, profile_info: Dict[str, Any]) -> Optional[str]:
+def extract_provider_username(
+    provider: str, profile_info: Dict[str, Any]
+) -> Optional[str]:
     if not profile_info:
         return None
 
@@ -285,14 +301,30 @@ def extract_provider_username(provider: str, profile_info: Dict[str, Any]) -> Op
         return user_info.get("display_name") or user_info.get("username")
     return None
 
-app = FastAPI(title="Kern Oracle Backend", description="AI Oracle for Clip-to-Earn Verification")
+
+app = FastAPI(
+    title="Kern Oracle Backend", description="AI Oracle for Clip-to-Earn Verification"
+)
+
+# CORS Configuration
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    FRONTEND_PUBLIC_URL,
+]
+
+# Add wildcard for Vercel preview deployments
+if "vercel.app" in FRONTEND_PUBLIC_URL:
+    allowed_origins.append("https://*.vercel.app")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=["*"],  # Allow all origins for now, can restrict later
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
 )
+
 
 class CampaignCreate(BaseModel):
     title: str
@@ -305,19 +337,23 @@ class CampaignCreate(BaseModel):
     soft_rules: Optional[str] = None
     status: str = "active"
 
+
 class ClipSubmission(BaseModel):
     campaign_id: str
     video_url: str
     platform: Optional[str] = None
     clipper_wallet: Optional[str] = None
 
+
 class DisputeCreate(BaseModel):
     clip_id: str
     reason: Optional[str] = None
     creator_stake: float = 0
 
+
 class DisputeResolve(BaseModel):
     verdict: str
+
 
 class ProfileUpdate(BaseModel):
     wallet_address: Optional[str] = None
@@ -325,9 +361,11 @@ class ProfileUpdate(BaseModel):
     avatar_url: Optional[str] = None
     social_links: Optional[Dict[str, Any]] = None
 
+
 class SocialLinkRequest(BaseModel):
     provider: str
     redirect_url: Optional[str] = None
+
 
 class CampaignPrepare(BaseModel):
     title: str
@@ -339,9 +377,11 @@ class CampaignPrepare(BaseModel):
     ai_rules: Dict[str, Any] = Field(default_factory=dict)
     soft_rules: Optional[str] = None
 
+
 class CampaignSubmit(BaseModel):
     signed_transaction: str  # base64-encoded signed transaction
     campaign_metadata: Dict[str, Any]  # campaign details to store
+
 
 def get_current_user(
     authorization: Optional[str] = Header(default=None),
@@ -361,7 +401,11 @@ def get_current_user(
         user = user_response.user
         auth_mode = "supabase"
         user_metadata = user.user_metadata or {}
-        profile_wallet = profile_wallet or extract_wallet_address_from_user(user) or user_metadata.get("wallet_address")
+        profile_wallet = (
+            profile_wallet
+            or extract_wallet_address_from_user(user)
+            or user_metadata.get("wallet_address")
+        )
         user_id = user.id
     elif DEMO_AUTH_ENABLED:
         if not profile_wallet:
@@ -383,7 +427,9 @@ def get_current_user(
         "social_links": user_metadata.get("social_links", {}),
     }
     if auth_mode == "supabase":
-        create_user_scoped_client(token).table("profiles").upsert(profile_payload).execute()
+        create_user_scoped_client(token).table("profiles").upsert(
+            profile_payload
+        ).execute()
     elif service_db is not None:
         service_db.table("profiles").upsert(profile_payload).execute()
     else:
@@ -399,11 +445,16 @@ def get_current_user(
         "access_token": token,
     }
 
-def process_clip_background(clip_id: str, video_url: str, source_vod_url: Optional[str]):
+
+def process_clip_background(
+    clip_id: str, video_url: str, source_vod_url: Optional[str]
+):
     print(f"--- Starting background processing for clip {clip_id} ---")
     verification = verify_clip_originality(video_url, source_vod_url)
     ai_score = verification["ai_score"]
-    ai_status = verification["ai_status"] if ai_score >= AI_SCORE_THRESHOLD else "rejected"
+    ai_status = (
+        verification["ai_status"] if ai_score >= AI_SCORE_THRESHOLD else "rejected"
+    )
     status = "tracking" if ai_status == "verified" else "disputed"
 
     db.table("clips").update(
@@ -417,18 +468,27 @@ def process_clip_background(clip_id: str, video_url: str, source_vod_url: Option
 
     print("--- Processing Complete ---")
 
+
 @app.get("/")
 def read_root():
     return {"status": "Kern AI Oracle is running"}
+
 
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "kern-backend"}
 
+
 @app.get("/me")
 def get_me(user=Depends(get_current_user)):
     user_db = get_user_db(user)
-    response = user_db.table("profiles").select("*").eq("id", user["user_id"]).single().execute()
+    response = (
+        user_db.table("profiles")
+        .select("*")
+        .eq("id", user["user_id"])
+        .single()
+        .execute()
+    )
     if not response.data:
         raise HTTPException(status_code=404, detail="Profile not found")
     return {"status": "success", "data": response.data}
@@ -439,7 +499,9 @@ def get_social_accounts(user=Depends(get_current_user)):
     user_db = get_user_db(user)
     response = (
         user_db.table("social_accounts")
-        .select("provider, provider_user_id, provider_username, scope, expires_at, updated_at")
+        .select(
+            "provider, provider_user_id, provider_username, scope, expires_at, updated_at"
+        )
         .eq("profile_id", user["user_id"])
         .execute()
     )
@@ -453,8 +515,11 @@ def delete_social_account(provider: str, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Unsupported provider")
 
     user_db = get_user_db(user)
-    user_db.table("social_accounts").delete().eq("profile_id", user["user_id"]).eq("provider", provider).execute()
+    user_db.table("social_accounts").delete().eq("profile_id", user["user_id"]).eq(
+        "provider", provider
+    ).execute()
     return {"status": "success"}
+
 
 @app.patch("/me")
 def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
@@ -483,13 +548,22 @@ def update_me(payload: ProfileUpdate, user=Depends(get_current_user)):
     if not updates:
         raise HTTPException(status_code=400, detail="No profile updates provided")
 
-    response = user_db.table("profiles").update(updates).eq("id", user["user_id"]).execute()
+    response = (
+        user_db.table("profiles").update(updates).eq("id", user["user_id"]).execute()
+    )
     try:
-        if auth_updates and user.get("auth_mode") == "supabase" and service_db is not None:
-            service_db.auth.admin.update_user_by_id(user["user_id"], {"user_metadata": auth_updates})
+        if (
+            auth_updates
+            and user.get("auth_mode") == "supabase"
+            and service_db is not None
+        ):
+            service_db.auth.admin.update_user_by_id(
+                user["user_id"], {"user_metadata": auth_updates}
+            )
     except Exception as exc:
         print(f"[Auth] Failed to sync user_metadata: {exc}")
     return {"status": "success", "data": response.data}
+
 
 @app.post("/me/link-social")
 def link_social(payload: SocialLinkRequest, user=Depends(get_current_user)):
@@ -536,32 +610,45 @@ def oauth_callback(
         raise HTTPException(status_code=400, detail="Missing code or state")
 
     if service_db is None:
-        raise HTTPException(status_code=500, detail="SUPABASE_SERVICE_ROLE_KEY required for OAuth callback")
+        raise HTTPException(
+            status_code=500,
+            detail="SUPABASE_SERVICE_ROLE_KEY required for OAuth callback",
+        )
 
     provider = provider.lower()
     if provider not in ALLOWED_SOCIAL_KEYS:
         raise HTTPException(status_code=400, detail="Unsupported provider")
 
     config = get_oauth_config(provider)
-    state_response = service_db.table("oauth_states").select("*").eq("id", state).single().execute()
+    state_response = (
+        service_db.table("oauth_states").select("*").eq("id", state).single().execute()
+    )
     if not state_response.data:
         raise HTTPException(status_code=400, detail="Invalid or expired state")
 
     token_payload = exchange_token(config, code)
     access_token = token_payload.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=400, detail="OAuth token response missing access_token")
+        raise HTTPException(
+            status_code=400, detail="OAuth token response missing access_token"
+        )
 
     profile_info = fetch_provider_profile(provider, access_token)
-    provider_user_id = extract_provider_user_id(token_payload) or extract_profile_user_id(provider, profile_info)
+    provider_user_id = extract_provider_user_id(
+        token_payload
+    ) or extract_profile_user_id(provider, profile_info)
     provider_username = extract_provider_username(provider, profile_info)
 
     expires_at = None
-    expires_in = token_payload.get("expires_in") or token_payload.get("expires_in_seconds")
+    expires_in = token_payload.get("expires_in") or token_payload.get(
+        "expires_in_seconds"
+    )
     if expires_in:
         try:
             expires_seconds = int(expires_in)
-            expires_at = (datetime.utcnow() + timedelta(seconds=expires_seconds)).isoformat()
+            expires_at = (
+                datetime.utcnow() + timedelta(seconds=expires_seconds)
+            ).isoformat()
         except (TypeError, ValueError):
             expires_at = None
 
@@ -586,15 +673,24 @@ def oauth_callback(
     redirect_url = state_response.data.get("redirect_url") or FRONTEND_PUBLIC_URL
     return RedirectResponse(f"{redirect_url}?linked={provider}")
 
+
 @app.get("/me/payouts")
 def get_my_payouts(user=Depends(get_current_user)):
-    clip_response = db.table("clips").select("id").eq("clipper_id", user["user_id"]).execute()
+    clip_response = (
+        db.table("clips").select("id").eq("clipper_id", user["user_id"]).execute()
+    )
     clip_ids = [clip["id"] for clip in (clip_response.data or [])]
 
     if not clip_ids:
         return {"status": "success", "data": {"payouts": [], "total_paid": 0}}
 
-    payouts_response = db.table("payouts").select("*").in_("clip_id", clip_ids).order("paid_at", desc=True).execute()
+    payouts_response = (
+        db.table("payouts")
+        .select("*")
+        .in_("clip_id", clip_ids)
+        .order("paid_at", desc=True)
+        .execute()
+    )
     payouts = payouts_response.data or []
     total_paid = sum(float(payout.get("amount_paid", 0) or 0) for payout in payouts)
 
@@ -606,6 +702,7 @@ def get_my_payouts(user=Depends(get_current_user)):
         },
     }
 
+
 @app.post("/campaigns/prepare")
 def prepare_campaign(payload: CampaignPrepare, user=Depends(get_current_user)):
     """
@@ -615,18 +712,22 @@ def prepare_campaign(payload: CampaignPrepare, user=Depends(get_current_user)):
     creator_wallet = user["wallet_address"]
 
     if payload.reward_rate <= 0 or payload.total_budget <= 0:
-        raise HTTPException(status_code=400, detail="Budget and reward rate must be greater than zero")
+        raise HTTPException(
+            status_code=400, detail="Budget and reward rate must be greater than zero"
+        )
 
     campaign_seed = generate_campaign_seed()
     budget_lamports = sol_to_lamports(payload.total_budget)
     rate_lamports = sol_to_lamports(payload.reward_rate)
 
     try:
-        serialized_tx, campaign_pda, bump, program_id = build_unsigned_campaign_transaction(
-            creator_wallet=creator_wallet,
-            seed=campaign_seed,
-            budget_lamports=budget_lamports,
-            rate_per_1k_lamports=rate_lamports,
+        serialized_tx, campaign_pda, bump, program_id = (
+            build_unsigned_campaign_transaction(
+                creator_wallet=creator_wallet,
+                seed=campaign_seed,
+                budget_lamports=budget_lamports,
+                rate_per_1k_lamports=rate_lamports,
+            )
         )
     except ChainIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -639,8 +740,9 @@ def prepare_campaign(payload: CampaignPrepare, user=Depends(get_current_user)):
             "bump": bump,
             "program_id": program_id,
             "campaign_seed": campaign_seed,
-        }
+        },
     }
+
 
 @app.post("/campaigns/submit")
 def submit_campaign(payload: CampaignSubmit, user=Depends(get_current_user)):
@@ -678,13 +780,16 @@ def submit_campaign(payload: CampaignSubmit, user=Depends(get_current_user)):
     response = user_db.table("campaigns").insert(campaign).execute()
     return {"status": "success", "data": response.data}
 
+
 @app.post("/campaigns")
 def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
     user_db = get_user_db(user)
     creator_wallet = user["wallet_address"]
 
     if payload.reward_rate <= 0 or payload.total_budget <= 0:
-        raise HTTPException(status_code=400, detail="Budget and reward rate must be greater than zero")
+        raise HTTPException(
+            status_code=400, detail="Budget and reward rate must be greater than zero"
+        )
 
     campaign_seed = generate_campaign_seed()
     budget_lamports = sol_to_lamports(payload.total_budget)
@@ -721,6 +826,7 @@ def create_campaign(payload: CampaignCreate, user=Depends(get_current_user)):
     response = user_db.table("campaigns").insert(campaign).execute()
     return {"status": "success", "data": response.data}
 
+
 @app.get("/campaigns")
 def list_campaigns(status: Optional[str] = None):
     query = db.table("campaigns").select("*")
@@ -729,60 +835,91 @@ def list_campaigns(status: Optional[str] = None):
     response = query.execute()
     return {"status": "success", "data": response.data}
 
+
 @app.post("/campaigns/{campaign_id}/join")
 def join_campaign(campaign_id: str, user=Depends(get_current_user)):
     user_db = get_user_db(user)
-    
+
     # Check if campaign exists
-    campaign_response = user_db.table("campaigns").select("id").eq("id", campaign_id).single().execute()
+    campaign_response = (
+        user_db.table("campaigns").select("id").eq("id", campaign_id).single().execute()
+    )
     if not campaign_response.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
-    participant_payload = {
-        "campaign_id": campaign_id,
-        "clipper_id": user["user_id"]
-    }
-    
+    participant_payload = {"campaign_id": campaign_id, "clipper_id": user["user_id"]}
+
     try:
-        response = user_db.table("campaign_participants").upsert(participant_payload, on_conflict="campaign_id,clipper_id").execute()
+        response = (
+            user_db.table("campaign_participants")
+            .upsert(participant_payload, on_conflict="campaign_id,clipper_id")
+            .execute()
+        )
         return {"status": "success", "data": response.data}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to join campaign: {str(exc)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to join campaign: {str(exc)}"
+        )
+
 
 @app.get("/me/joined-campaigns")
 def get_joined_campaigns(user=Depends(get_current_user)):
     user_db = get_user_db(user)
-    
+
     # Get campaign IDs from participants table
-    participants_response = user_db.table("campaign_participants").select("campaign_id").eq("clipper_id", user["user_id"]).execute()
+    participants_response = (
+        user_db.table("campaign_participants")
+        .select("campaign_id")
+        .eq("clipper_id", user["user_id"])
+        .execute()
+    )
     campaign_ids = [p["campaign_id"] for p in (participants_response.data or [])]
-    
+
     if not campaign_ids:
         return {"status": "success", "data": []}
-        
+
     # Get full campaign details
-    campaigns_response = user_db.table("campaigns").select("*").in_("id", campaign_ids).execute()
+    campaigns_response = (
+        user_db.table("campaigns").select("*").in_("id", campaign_ids).execute()
+    )
     return {"status": "success", "data": campaigns_response.data or []}
+
 
 @app.get("/campaigns/{campaign_id}")
 def get_campaign(campaign_id: str):
-    response = db.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    response = (
+        db.table("campaigns").select("*").eq("id", campaign_id).single().execute()
+    )
     if not response.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return {"status": "success", "data": response.data}
 
+
 @app.get("/clips/{clip_id}")
 def get_clip(clip_id: str, user=Depends(get_current_user)):
     user_db = get_user_db(user)
-    clip_response = user_db.table("clips").select("*").eq("id", clip_id).single().execute()
+    clip_response = (
+        user_db.table("clips").select("*").eq("id", clip_id).single().execute()
+    )
     if not clip_response.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
     clip = clip_response.data
     if clip.get("clipper_id") != user["user_id"]:
-        campaign_response = user_db.table("campaigns").select("creator_id").eq("id", clip["campaign_id"]).single().execute()
-        if not campaign_response.data or campaign_response.data["creator_id"] != user["user_id"]:
-            raise HTTPException(status_code=403, detail="Not authorized to view this clip")
+        campaign_response = (
+            user_db.table("campaigns")
+            .select("creator_id")
+            .eq("id", clip["campaign_id"])
+            .single()
+            .execute()
+        )
+        if (
+            not campaign_response.data
+            or campaign_response.data["creator_id"] != user["user_id"]
+        ):
+            raise HTTPException(
+                status_code=403, detail="Not authorized to view this clip"
+            )
 
     snapshots_response = (
         user_db.table("view_snapshots")
@@ -792,8 +929,12 @@ def get_clip(clip_id: str, user=Depends(get_current_user)):
         .limit(5)
         .execute()
     )
-    payouts_response = user_db.table("payouts").select("*").eq("clip_id", clip_id).execute()
-    dispute_response = user_db.table("disputes").select("*").eq("clip_id", clip_id).execute()
+    payouts_response = (
+        user_db.table("payouts").select("*").eq("clip_id", clip_id).execute()
+    )
+    dispute_response = (
+        user_db.table("disputes").select("*").eq("clip_id", clip_id).execute()
+    )
 
     return {
         "status": "success",
@@ -805,11 +946,20 @@ def get_clip(clip_id: str, user=Depends(get_current_user)):
         },
     }
 
+
 @app.post("/submit-clip")
-def submit_clip(submission: ClipSubmission, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+def submit_clip(
+    submission: ClipSubmission,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_current_user),
+):
     user_db = get_user_db(user)
     campaign_response = (
-        user_db.table("campaigns").select("id, source_vod_url").eq("id", submission.campaign_id).single().execute()
+        user_db.table("campaigns")
+        .select("id, source_vod_url")
+        .eq("id", submission.campaign_id)
+        .single()
+        .execute()
     )
     if not campaign_response.data:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -846,14 +996,25 @@ def submit_clip(submission: ClipSubmission, background_tasks: BackgroundTasks, u
         },
     }
 
+
 @app.post("/disputes")
 def create_dispute(payload: DisputeCreate, user=Depends(get_current_user)):
-    clip_response = db.table("clips").select("id, campaign_id").eq("id", payload.clip_id).single().execute()
+    clip_response = (
+        db.table("clips")
+        .select("id, campaign_id")
+        .eq("id", payload.clip_id)
+        .single()
+        .execute()
+    )
     if not clip_response.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
     campaign_response = (
-        db.table("campaigns").select("id, creator_id").eq("id", clip_response.data["campaign_id"]).single().execute()
+        db.table("campaigns")
+        .select("id, creator_id")
+        .eq("id", clip_response.data["campaign_id"])
+        .single()
+        .execute()
     )
     if campaign_response.data["creator_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Only the creator can dispute")
@@ -869,27 +1030,42 @@ def create_dispute(payload: DisputeCreate, user=Depends(get_current_user)):
 
     return {"status": "success", "message": "Dispute opened"}
 
+
 @app.post("/disputes/{clip_id}/resolve")
-def resolve_dispute(clip_id: str, payload: DisputeResolve, user=Depends(get_current_user)):
-    dispute_response = db.table("disputes").select("clip_id").eq("clip_id", clip_id).single().execute()
+def resolve_dispute(
+    clip_id: str, payload: DisputeResolve, user=Depends(get_current_user)
+):
+    dispute_response = (
+        db.table("disputes").select("clip_id").eq("clip_id", clip_id).single().execute()
+    )
     if not dispute_response.data:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
-    clip_response = db.table("clips").select("campaign_id").eq("id", clip_id).single().execute()
+    clip_response = (
+        db.table("clips").select("campaign_id").eq("id", clip_id).single().execute()
+    )
     if not clip_response.data:
         raise HTTPException(status_code=404, detail="Clip not found")
 
     campaign_response = (
-        db.table("campaigns").select("creator_id").eq("id", clip_response.data["campaign_id"]).single().execute()
+        db.table("campaigns")
+        .select("creator_id")
+        .eq("id", clip_response.data["campaign_id"])
+        .single()
+        .execute()
     )
     if campaign_response.data["creator_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Only the creator can resolve")
 
     verdict = payload.verdict
     if verdict not in {"valid", "fraud"}:
-        raise HTTPException(status_code=400, detail="Verdict must be 'valid' or 'fraud'")
+        raise HTTPException(
+            status_code=400, detail="Verdict must be 'valid' or 'fraud'"
+        )
 
-    db.table("disputes").update({"status": "resolved", "verdict": verdict}).eq("clip_id", clip_id).execute()
+    db.table("disputes").update({"status": "resolved", "verdict": verdict}).eq(
+        "clip_id", clip_id
+    ).execute()
     next_status = "tracking" if verdict == "valid" else "disputed"
     db.table("clips").update({"status": next_status}).eq("id", clip_id).execute()
 
