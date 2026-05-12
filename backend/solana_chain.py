@@ -66,6 +66,16 @@ def get_oracle_authority_pubkey() -> Pubkey:
 
 
 def load_authority_keypair() -> Keypair:
+    # 1. Try loading from environment variable first (Best for Vercel/Production)
+    env_key = os.environ.get("KERN_ORACLE_SECRET_KEY")
+    if env_key:
+        try:
+            secret_key = json.loads(env_key)
+            return Keypair.from_bytes(bytes(secret_key))
+        except Exception as exc:
+            raise ChainIntegrationError(f"Invalid KERN_ORACLE_SECRET_KEY env var: {exc}")
+
+    # 2. Fallback to file path (Local development)
     keypair_path = os.environ.get("KERN_SOLANA_KEYPAIR_PATH") or os.environ.get(
         "SOLANA_KEYPAIR_PATH"
     )

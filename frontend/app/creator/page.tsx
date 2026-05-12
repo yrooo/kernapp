@@ -6,12 +6,13 @@ import { toast } from "sonner"
 import { Buffer } from "buffer"
 import { Transaction } from "@solana/web3.js"
 import { Sidebar } from "@/components/sidebar"
-import { CheckCircle2, Circle, ArrowRight, ArrowLeft } from "lucide-react"
+import { CheckCircle2, Circle, ArrowRight, ArrowLeft, LayoutGrid, PlusCircle, AlertTriangle, PlayCircle, Eye, ShieldAlert, XCircle, RefreshCw, Clock } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
 import { SupabaseAuthButton } from "@/components/SupabaseAuthButton"
 import { useSupabaseAuth } from "@/components/WalletProvider"
 import { apiUrl, authHeaders } from "@/lib/backend"
 import { supabase } from "@/lib/supabase"
+import { VaultProgressBar } from "@/components/vault-progress-bar"
 
 export default function CreatorDashboard() {
   const { session, walletAddress } = useSupabaseAuth()
@@ -30,6 +31,15 @@ export default function CreatorDashboard() {
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState<string | null>(
     null
   )
+
+  // Tabs
+  const [activeTab, setActiveTab] = useState<"manage" | "create">("manage")
+  const [myCampaigns, setMyCampaigns] = useState<any[]>([])
+  const [loadingCampaigns, setLoadingCampaigns] = useState(false)
+  const [selectedManageCampaign, setSelectedManageCampaign] = useState<any | null>(null)
+  const [campaignClips, setCampaignClips] = useState<any[]>([])
+  const [loadingClips, setLoadingClips] = useState(false)
+  const [reviewingClipId, setReviewingClipId] = useState<string | null>(null)
 
   // Wizard State
   const [step, setStep] = useState(1)
@@ -65,6 +75,111 @@ export default function CreatorDashboard() {
       URL.revokeObjectURL(objectUrl)
     }
   }, [thumbnailFile])
+
+  useEffect(() => {
+    if (activeTab === "manage" && session?.user?.id) {
+      async function fetchMyCampaigns() {
+        setLoadingCampaigns(true)
+        try {
+          const res = await fetch(apiUrl("/campaigns"))
+          const payload = await res.json()
+          if (res.ok && payload.data) {
+            const mine = payload.data.filter((c: any) => c.creator_id === session?.user?.id)
+            setMyCampaigns(mine)
+          }
+        } catch (err) {
+          console.error("Failed to fetch campaigns", err)
+        } finally {
+          setLoadingCampaigns(false)
+        }
+      }
+      fetchMyCampaigns()
+    }
+  }, [activeTab, session])
+
+  // Fetch clips when a campaign is selected for management
+  useEffect(() => {
+    if (!selectedManageCampaign || !session?.access_token) {
+      setCampaignClips([])
+      return
+    }
+    async function fetchCampaignClips() {
+      setLoadingClips(true)
+      try {
+        const res = await fetch(apiUrl(`/campaigns/${selectedManageCampaign.id}/clips`), {
+          headers: authHeaders(session?.access_token, walletAddress),
+        })
+        const payload = await res.json()
+        if (res.ok && payload.data) {
+          setCampaignClips(payload.data)
+        }
+      } catch (err) {
+        console.error("Failed to fetch campaign clips", err)
+      } finally {
+        setLoadingClips(false)
+      }
+    }
+    fetchCampaignClips()
+  }, [selectedManageCampaign, session])
+
+  const handleReviewClip = async (clipId: string, action: "approve" | "reject") => {
+    if (!selectedManageCampaign || !session?.access_token) return
+    setReviewingClipId(clipId)
+    try {
+      const res = await fetch(
+        apiUrl(`/campaigns/${selectedManageCampaign.id}/clips/${clipId}/review`),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(session?.access_token, walletAddress),
+          },
+          body: JSON.stringify({ action }),
+        }
+      )
+      const payload = await res.json()
+      if (res.ok) {
+        toast.success(payload.message || `Clip ${action}d successfully`)
+        // Update local state
+        setCampaignClips((prev) =>
+          prev.map((c) =>
+            c.id === clipId
+              ? {
+                  ...c,
+                  ai_status: action === "approve" ? "verified" : "rejected",
+                  status: action === "approve" ? "tracking" : "disputed",
+                }
+              : c
+          )
+        )
+      } else {
+        toast.error(payload.detail || `Failed to ${action} clip`)
+      }
+    } catch (err) {
+      console.error(err)
+      toast.error(`Error ${action}ing clip`)
+    } finally {
+      setReviewingClipId(null)
+    }
+  }
+
+  const refreshCampaignClips = async () => {
+    if (!selectedManageCampaign || !session?.access_token) return
+    setLoadingClips(true)
+    try {
+      const res = await fetch(apiUrl(`/campaigns/${selectedManageCampaign.id}/clips`), {
+        headers: authHeaders(session?.access_token, walletAddress),
+      })
+      const payload = await res.json()
+      if (res.ok && payload.data) {
+        setCampaignClips(payload.data)
+      }
+    } catch (err) {
+      console.error("Failed to refresh clips", err)
+    } finally {
+      setLoadingClips(false)
+    }
+  }
 
   const handleCreateCampaign = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -250,19 +365,280 @@ export default function CreatorDashboard() {
           }
         />
 
-        <main className="mx-auto w-full max-w-3xl flex-1">
-          <div className="relative mb-12 flex items-center justify-between">
-            {/* Step Indicators */}
-            <div className="absolute top-1/2 left-0 -z-10 h-0.5 w-full -translate-y-1/2 transform bg-border"></div>
-            {[1, 2, 3].map((s) => (
-              <div
-                key={s}
-                className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${step >= s ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground"} font-serif font-medium transition-all`}
-              >
-                {s}
-              </div>
-            ))}
+        <main className="mx-auto w-full max-w-5xl flex-1">
+          <div className="mb-8 flex space-x-2 rounded-2xl bg-secondary/30 p-1">
+            <button
+              onClick={() => { setActiveTab("manage"); setSelectedManageCampaign(null); }}
+              className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium transition-all ${activeTab === "manage" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <LayoutGrid size={18} />
+              Manage Campaigns
+            </button>
+            <button
+              onClick={() => setActiveTab("create")}
+              className={`flex-1 flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-medium transition-all ${activeTab === "create" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <PlusCircle size={18} />
+              Create New
+            </button>
           </div>
+
+          {activeTab === "manage" && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {!selectedManageCampaign ? (
+                <div className="space-y-6">
+                  <h2 className="font-serif text-3xl text-foreground">Your Campaigns</h2>
+                  {loadingCampaigns ? (
+                    <p className="text-muted-foreground">Loading your campaigns...</p>
+                  ) : myCampaigns.length === 0 ? (
+                    <div className="rounded-[32px] border border-border bg-card p-12 text-center shadow-sm">
+                      <p className="text-muted-foreground mb-4">You haven't created any campaigns yet.</p>
+                      <button onClick={() => setActiveTab("create")} className="rounded-full bg-primary px-6 py-3 text-primary-foreground font-medium hover:bg-primary/90 transition-all">
+                        Create Your First Campaign
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {myCampaigns.map(camp => (
+                        <div key={camp.id} onClick={() => setSelectedManageCampaign(camp)} className="cursor-pointer group rounded-[32px] border border-border bg-card overflow-hidden shadow-sm hover:shadow-md transition-all hover:-translate-y-1">
+                          <div className="h-40 bg-muted overflow-hidden relative">
+                            {camp.thumbnail_url ? (
+                              <img src={camp.thumbnail_url} alt={camp.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                            ) : (
+                              <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-secondary/20 to-background" />
+                            )}
+                            <div className="absolute top-4 right-4 bg-background/80 backdrop-blur-sm rounded-full px-3 py-1 text-xs font-bold uppercase border border-border">
+                              {camp.status}
+                            </div>
+                          </div>
+                          <div className="p-6">
+                            <h3 className="font-serif text-xl mb-2 font-medium line-clamp-1">{camp.title}</h3>
+                            <div className="flex justify-between items-center text-sm text-muted-foreground">
+                              <span>{camp.total_budget} SOL</span>
+                              <span>{camp.reward_rate} SOL/1k</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  <button onClick={() => setSelectedManageCampaign(null)} className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors text-sm font-medium">
+                    <ArrowLeft size={16} /> Back to campaigns
+                  </button>
+                  
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div className="flex-1 w-full max-w-md">
+                      <h2 className="font-serif text-4xl font-medium text-foreground">{selectedManageCampaign.title}</h2>
+                      <p className="text-muted-foreground mt-2 font-mono text-xs break-all">Vault PDA: {selectedManageCampaign.vault_pda}</p>
+                      <VaultProgressBar campaignId={selectedManageCampaign.id} />
+                    </div>
+                    <div className="flex items-center gap-4 bg-card border border-border rounded-full px-6 py-3 shadow-sm">
+                      <div className="text-center">
+                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Remaining</p>
+                        <p className="font-medium text-foreground">{selectedManageCampaign.total_budget} SOL</p>
+                      </div>
+                      <div className="w-px h-8 bg-border"></div>
+                      <div className="text-center">
+                        <p className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Rate</p>
+                        <p className="font-medium text-foreground">{selectedManageCampaign.reward_rate} SOL/1k</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-serif text-2xl text-foreground">Submitted Clips</h3>
+                      <button
+                        onClick={refreshCampaignClips}
+                        disabled={loadingClips}
+                        className="flex items-center gap-2 rounded-full bg-secondary/50 px-4 py-2 text-xs font-medium text-foreground hover:bg-secondary/80 transition-all border border-border disabled:opacity-50"
+                      >
+                        <RefreshCw size={14} className={loadingClips ? "animate-spin" : ""} />
+                        Refresh
+                      </button>
+                    </div>
+
+                    {loadingClips ? (
+                      <div className="rounded-[32px] border border-border bg-card p-12 text-center">
+                        <p className="text-muted-foreground">Loading clips...</p>
+                      </div>
+                    ) : campaignClips.length === 0 ? (
+                      <div className="rounded-[32px] border border-dashed border-border bg-card p-12 text-center">
+                        <p className="text-muted-foreground">No clips submitted yet. Share your campaign link with clippers!</p>
+                      </div>
+                    ) : (
+                      <div className="grid gap-4">
+                        {campaignClips.map((clip) => {
+                          const isPending = clip.ai_status === "pending"
+                          const isVerified = clip.ai_status === "verified"
+                          const isRejected = clip.ai_status === "rejected"
+                          const isPaid = clip.status === "paid"
+                          const isDisputed = clip.status === "disputed"
+                          const views = clip.current_views || clip.initial_views || 0
+                          const aiScore = clip.ai_score ? Math.round(clip.ai_score * 100) : null
+
+                          // Determine border color based on status
+                          const borderClass = isPaid
+                            ? "border-green-500/30 bg-green-500/5"
+                            : isRejected || isDisputed
+                            ? "border-red-500/30 bg-red-500/5"
+                            : isPending
+                            ? "border-amber-500/30 bg-amber-500/5"
+                            : "border-border bg-card"
+
+                          return (
+                            <div key={clip.id} className={`rounded-[32px] border ${borderClass} p-6 shadow-sm flex flex-col md:flex-row gap-6`}>
+                              <div className="md:w-1/3 space-y-4">
+                                <div className="aspect-[9/16] bg-black rounded-2xl overflow-hidden relative border border-border">
+                                  <div className="absolute inset-0 flex items-center justify-center">
+                                    <PlayCircle size={48} className="text-white/50" />
+                                  </div>
+                                </div>
+                                <a href={clip.video_url} target="_blank" rel="noreferrer" className="block text-center text-sm font-medium text-primary hover:underline break-all">
+                                  {clip.video_url}
+                                </a>
+                              </div>
+                              <div className="flex-1 space-y-6">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    {isPending && (
+                                      <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-3 py-1 text-xs font-bold text-amber-600 dark:text-amber-400 uppercase border border-amber-500/20 mb-2">
+                                        <Clock size={12} />
+                                        Pending Review{aiScore !== null ? ` (Score: ${aiScore})` : ""}
+                                      </div>
+                                    )}
+                                    {isVerified && !isPaid && (
+                                      <div className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 px-3 py-1 text-xs font-bold text-green-600 dark:text-green-400 uppercase border border-green-500/20 mb-2">
+                                        <CheckCircle2 size={12} />
+                                        AI Verified{aiScore !== null ? ` (Score: ${aiScore})` : ""}
+                                      </div>
+                                    )}
+                                    {isPaid && (
+                                      <div className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 px-3 py-1 text-xs font-bold text-green-600 dark:text-green-400 uppercase border border-green-500/20 mb-2">
+                                        <CheckCircle2 size={12} />
+                                        Paid Out
+                                      </div>
+                                    )}
+                                    {(isRejected || isDisputed) && !isPaid && (
+                                      <div className="inline-flex items-center gap-1.5 rounded-full bg-red-500/20 px-3 py-1 text-xs font-bold text-red-600 dark:text-red-400 uppercase border border-red-500/20 mb-2">
+                                        <XCircle size={12} />
+                                        Rejected{aiScore !== null ? ` (Score: ${aiScore})` : ""}
+                                      </div>
+                                    )}
+                                    <p className="text-muted-foreground text-sm">
+                                      Submitted {clip.created_at ? new Date(clip.created_at).toLocaleString() : "recently"}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-2xl font-serif font-medium text-foreground">{views.toLocaleString()}</p>
+                                    <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Views</p>
+                                  </div>
+                                </div>
+
+                                {/* Oracle info */}
+                                <div className="space-y-3 bg-background rounded-2xl border border-border p-5">
+                                  <h4 className="text-sm font-bold flex items-center gap-2 text-foreground">
+                                    {isVerified || isPaid ? (
+                                      <><CheckCircle2 size={16} className="text-green-500" /> Oracle Status</>
+                                    ) : isRejected || isDisputed ? (
+                                      <><XCircle size={16} className="text-red-500" /> Oracle Status</>
+                                    ) : (
+                                      <><ShieldAlert size={16} className="text-amber-500" /> Oracle Status</>
+                                    )}
+                                  </h4>
+                                  {isPending && (
+                                    <p className="text-sm text-muted-foreground">AI review complete. Awaiting your decision.</p>
+                                  )}
+                                  {isVerified && !isPaid && (
+                                    <p className="text-sm text-muted-foreground">All checks passed. Clip is verified and tracking views for payout.</p>
+                                  )}
+                                  {isPaid && (
+                                    <p className="text-sm text-muted-foreground">Payout has been processed for this clip.</p>
+                                  )}
+                                  {(isRejected || isDisputed) && !isPaid && (
+                                    <p className="text-sm text-muted-foreground">This clip has been rejected. The clipper has been notified.</p>
+                                  )}
+                                  {clip.ai_metadata && (
+                                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                                      {clip.ai_metadata.face_match !== undefined && (
+                                        <span className={`px-2 py-1 rounded-lg border ${clip.ai_metadata.face_match ? "border-green-500/30 text-green-600" : "border-red-500/30 text-red-500"}`}>
+                                          Face: {clip.ai_metadata.face_score ? `${Math.round(clip.ai_metadata.face_score * 100)}%` : clip.ai_metadata.face_match ? "✓" : "✗"}
+                                        </span>
+                                      )}
+                                      {clip.ai_metadata.audio_match !== undefined && (
+                                        <span className={`px-2 py-1 rounded-lg border ${clip.ai_metadata.audio_match ? "border-green-500/30 text-green-600" : "border-red-500/30 text-red-500"}`}>
+                                          Audio: {clip.ai_metadata.audio_score ? `${Math.round(clip.ai_metadata.audio_score * 100)}%` : clip.ai_metadata.audio_match ? "✓" : "✗"}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Action buttons - only for pending/unreviewed clips */}
+                                {!isPaid && !isDisputed && (
+                                  <div className="flex gap-3 pt-2">
+                                    {(isPending || isRejected) && (
+                                      <button
+                                        onClick={() => handleReviewClip(clip.id, "reject")}
+                                        disabled={reviewingClipId === clip.id}
+                                        className="flex-1 bg-red-500 hover:bg-red-600 text-white rounded-full py-3 font-medium transition-colors text-sm shadow-sm disabled:opacity-50"
+                                      >
+                                        {reviewingClipId === clip.id ? "Processing..." : "Reject & Dispute"}
+                                      </button>
+                                    )}
+                                    {(isPending || !isVerified) && (
+                                      <button
+                                        onClick={() => handleReviewClip(clip.id, "approve")}
+                                        disabled={reviewingClipId === clip.id}
+                                        className="flex-1 bg-foreground hover:bg-foreground/90 text-background rounded-full py-3 font-medium transition-colors text-sm shadow-sm disabled:opacity-50"
+                                      >
+                                        {reviewingClipId === clip.id ? "Processing..." : "Override & Approve"}
+                                      </button>
+                                    )}
+                                    {isVerified && (
+                                      <button className="flex-1 bg-secondary/50 text-foreground rounded-full py-3 font-medium text-sm border border-border cursor-default" disabled>
+                                        Tracking — paying out automatically
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                                {isPaid && (
+                                  <div className="flex gap-3 pt-2">
+                                    <button className="flex-1 bg-green-500/10 text-green-600 rounded-full py-3 font-medium text-sm border border-green-500/20 cursor-default" disabled>
+                                      ✓ Paid out successfully
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "create" && (
+            <>
+              <div className="relative mb-12 flex items-center justify-between">
+                {/* Step Indicators */}
+                <div className="absolute top-1/2 left-0 -z-10 h-0.5 w-full -translate-y-1/2 transform bg-border"></div>
+                {[1, 2, 3].map((s) => (
+                  <div
+                    key={s}
+                    className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${step >= s ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background text-muted-foreground"} font-serif font-medium transition-all`}
+                  >
+                    {s}
+                  </div>
+                ))}
+              </div>
+
 
           <form
             onSubmit={handleCreateCampaign}
@@ -619,6 +995,8 @@ export default function CreatorDashboard() {
               </div>
             )}
           </form>
+          </>
+          )}
         </main>
       </div>
     </div>

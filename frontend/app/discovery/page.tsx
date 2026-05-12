@@ -13,6 +13,7 @@ import {
   getCampaignsWithCache,
   invalidateCampaignCaches,
 } from "@/lib/campaign-cache"
+import { VaultProgressBar } from "@/components/vault-progress-bar"
 
 const SOCIAL_ICONS: Record<string, any> = {
   youtube: SiYoutube,
@@ -204,6 +205,8 @@ export default function DiscoveryPage() {
                             </p>
                           </div>
                         </div>
+
+                        <VaultProgressBar campaignId={campaign.id} />
 
                         <div className="flex items-center justify-between pt-2">
                           <span className="text-xs font-bold text-primary opacity-0 transition-all duration-300 translate-x-[-10px] group-hover:opacity-100 group-hover:translate-x-0">

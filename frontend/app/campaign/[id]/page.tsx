@@ -3,7 +3,7 @@
 import { useParams, useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Users, CheckCircle2, ArrowLeft, Shield, Sparkles, FileText, Layout } from "lucide-react"
+import { Users, CheckCircle2, ArrowLeft, Shield, Sparkles, FileText, Layout, RefreshCw, Clock, XCircle } from "lucide-react"
 import { SiYoutube, SiTiktok, SiInstagram } from "react-icons/si"
 import Link from "next/link"
 import { PageHeader } from "@/components/page-header"
@@ -12,6 +12,7 @@ import { apiUrl, authHeaders } from "@/lib/backend"
 import { SupabaseAuthButton } from "@/components/SupabaseAuthButton"
 import { useSupabaseAuth } from "@/components/WalletProvider"
 import { supabase } from "@/lib/supabase"
+import { VaultProgressBar } from "@/components/vault-progress-bar"
 import { invalidateCampaignCaches } from "@/lib/campaign-cache"
 import { Reveal, StaggerChildren, StaggerItem } from "@/components/ui/reveal"
 
@@ -75,6 +76,9 @@ export default function CampaignDetailPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submissionStatus, setSubmissionStatus] = useState<"idle" | "success" | "error">("idle")
   const [submissionMessage, setSubmissionMessage] = useState("")
+
+  const [myClips, setMyClips] = useState<any[]>([])
+  const [withdrawingClipId, setWithdrawingClipId] = useState<string | null>(null)
 
   const router = useRouter()
 
@@ -194,9 +198,60 @@ export default function CampaignDetailPage() {
       }
     }
 
+    async function fetchMyClips() {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session || !id) return
+
+      try {
+        const response = await fetch(apiUrl(`/campaigns/${id}/my-clips`), {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        })
+        const payload = await response.json()
+        if (active) {
+          setMyClips(payload.data || [])
+        }
+      } catch (error) {
+        console.error("Error fetching my clips:", error)
+      }
+    }
+
     checkJoinStatus()
-    return () => { active = false }
+    fetchMyClips()
+
+    // Auto-poll clips every 10 seconds to catch status changes
+    const interval = setInterval(fetchMyClips, 10000)
+    return () => { active = false; clearInterval(interval) }
   }, [id])
+
+  const handleWithdraw = async (clipId: string) => {
+    setWithdrawingClipId(clipId)
+    const { data: { session } } = await supabase.auth.getSession()
+    
+    try {
+      const res = await fetch(apiUrl(`/clips/${clipId}/withdraw`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(session?.access_token, walletAddress),
+        }
+      })
+      const payload = await res.json()
+      if (res.ok) {
+        toast.success(payload.message || "Withdrawal successful! Funds transferred.")
+        // Update local state to show paid
+        setMyClips(prev => prev.map(c => c.id === clipId ? { ...c, status: "paid" } : c))
+      } else {
+        toast.error(payload.detail || "Withdrawal failed")
+      }
+    } catch (error) {
+      console.error(error)
+      toast.error("An error occurred during withdrawal")
+    } finally {
+      setWithdrawingClipId(null)
+    }
+  }
 
   const handleSubmitClip = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -231,6 +286,14 @@ export default function CampaignDetailPage() {
         setSubmissionStatus("success")
         setSubmissionMessage(payload?.data?.message || "Clip submitted successfully!")
         setSubmissionUrl("")
+        
+        // Refresh clips
+        const freshClipsRes = await fetch(apiUrl(`/campaigns/${id}/my-clips`), {
+          headers: authHeaders(session.access_token, walletAddress)
+        })
+        const freshClips = await freshClipsRes.json()
+        setMyClips(freshClips.data || [])
+        
         setTimeout(() => setShowSubmissionForm(false), 3000)
       } else {
         setSubmissionStatus("error")
@@ -499,9 +562,7 @@ export default function CampaignDetailPage() {
                   <p className="mt-4 text-5xl font-bold text-foreground">
                     {campaign.total_budget} <span className="text-xl font-normal text-muted-foreground">SOL</span>
                   </p>
-                  <div className="mt-8 h-3 w-full overflow-hidden rounded-full bg-muted">
-                    <div className="h-full w-full rounded-full bg-primary shadow-[0_0_20px_rgba(var(--primary),0.5)]" />
-                  </div>
+                  <VaultProgressBar campaignId={campaign.id} />
                 </div>
 
                 <div className="rounded-[40px] border border-border bg-card p-10 shadow-xl">
@@ -571,6 +632,111 @@ export default function CampaignDetailPage() {
                           </p>
                         )}
                       </Reveal>
+                    )}
+
+                    {/* MY SUBMISSIONS */}
+                    {myClips.length > 0 && (
+                      <div className="mt-12 space-y-4">
+                        <div className="flex items-center justify-between mb-6">
+                          <h3 className="font-serif text-2xl text-foreground">My Submissions</h3>
+                          <button
+                            onClick={async () => {
+                              const { data: { session: s } } = await supabase.auth.getSession()
+                              if (!s || !id) return
+                              const res = await fetch(apiUrl(`/campaigns/${id}/my-clips`), {
+                                headers: authHeaders(s.access_token, walletAddress),
+                              })
+                              const payload = await res.json()
+                              setMyClips(payload.data || [])
+                              toast.success("Clips refreshed")
+                            }}
+                            className="flex items-center gap-2 rounded-full bg-secondary/50 px-4 py-2 text-xs font-medium text-foreground hover:bg-secondary/80 transition-all border border-border"
+                          >
+                            <RefreshCw size={14} />
+                            Refresh
+                          </button>
+                        </div>
+                        <div className="grid gap-4">
+                          {myClips.map((clip) => {
+                            const isPending = clip.ai_status === "pending"
+                            const isVerified = clip.ai_status === "verified" || clip.status === "tracking"
+                            const isRejected = clip.ai_status === "rejected"
+                            const isPaid = clip.status === "paid"
+                            const isDisputed = clip.status === "disputed"
+                            
+                            // Calculate approximate reward for UI
+                            const views = clip.current_views || clip.initial_views || 1000
+                            const rate = campaign.reward_rate || 0
+                            const estimatedReward = ((views / 1000) * rate).toFixed(3)
+
+                            return (
+                              <div key={clip.id} className={`rounded-[24px] border ${isPaid ? "border-green-500/30 bg-green-500/5" : isRejected || isDisputed ? "border-red-500/30 bg-red-500/5" : isPending ? "border-amber-500/30 bg-amber-500/5" : "border-border bg-card"} p-6 shadow-sm`}>
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                  <div>
+                                    <a href={clip.video_url} target="_blank" rel="noreferrer" className="text-sm font-medium text-primary hover:underline break-all">
+                                      {clip.video_url}
+                                    </a>
+                                    <div className="flex items-center gap-3 mt-2">
+                                      {isPending && (
+                                        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-600 border border-amber-500/20">
+                                          <Clock size={10} /> Pending Review
+                                        </span>
+                                      )}
+                                      {isVerified && !isPaid && !isPending && (
+                                        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-blue-500/20 text-blue-600 border border-blue-500/20">
+                                          <CheckCircle2 size={10} /> Verified
+                                        </span>
+                                      )}
+                                      {isPaid && (
+                                        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-green-500/20 text-green-600 border border-green-500/20">
+                                          <CheckCircle2 size={10} /> Paid
+                                        </span>
+                                      )}
+                                      {(isRejected || isDisputed) && !isPaid && (
+                                        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-red-500/20 text-red-600 border border-red-500/20">
+                                          <XCircle size={10} /> Rejected
+                                        </span>
+                                      )}
+                                      <span className="text-xs text-muted-foreground">{views.toLocaleString()} views</span>
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="flex flex-col items-end gap-2">
+                                    <div className="text-right">
+                                      <p className="text-sm font-medium text-foreground">{estimatedReward} SOL</p>
+                                      <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Earned</p>
+                                    </div>
+                                    {isVerified && !isPaid && !isPending && (
+                                      <button 
+                                        onClick={() => handleWithdraw(clip.id)}
+                                        disabled={withdrawingClipId === clip.id || parseFloat(estimatedReward) <= 0}
+                                        className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold px-4 py-2 rounded-full transition-all disabled:opacity-50"
+                                      >
+                                        {withdrawingClipId === clip.id ? "Processing..." : "Withdraw Reward"}
+                                      </button>
+                                    )}
+                                    {isPending && (
+                                      <span className="text-xs font-medium text-amber-600 flex items-center gap-1">
+                                        <Clock size={12} /> Awaiting review
+                                      </span>
+                                    )}
+                                    {isPaid && (
+                                      <span className="text-xs font-bold text-green-600 flex items-center gap-1">
+                                        <CheckCircle2 size={12} /> Transferred
+                                      </span>
+                                    )}
+                                    {(isRejected || isDisputed) && !isPaid && (
+                                      <span className="text-xs font-medium text-red-500 flex items-center gap-1">
+                                        <XCircle size={12} /> Not eligible
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
                     )}
                   </div>
                 ) : (

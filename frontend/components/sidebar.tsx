@@ -125,7 +125,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                 className="flex items-center gap-3 rounded-2xl px-4 py-3 font-medium text-muted-foreground transition-colors hover:bg-secondary/30 hover:text-foreground"
               >
                 <PlusCircle size={20} />
-                Create Campaign
+                Creator
               </Link>
             )}
 

@@ -89,10 +89,15 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `GET /campaigns` - List all campaigns
 - `GET /campaigns/{id}` - Get campaign details
 - `POST /campaigns/{id}/join` - Join a campaign
+- `GET /campaigns/{id}/clips` - List all clips for a campaign (Creator only)
+- `POST /campaigns/{id}/clips/{clip_id}/review` - Approve or Reject a clip (Creator only)
+- `GET /campaigns/{id}/vault-balance` - Get remaining vault balance
 
 ### Clips
 - `POST /submit-clip` - Submit a clip for verification
 - `GET /clips/{id}` - Get clip details
+- `POST /clips/{id}/withdraw` - Trigger reward withdrawal for a verified clip
+- `GET /campaigns/{id}/my-clips` - Get current user's clips for a campaign
 
 ### Profile
 - `GET /me` - Get current user profile
@@ -100,6 +105,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `GET /me/social-accounts` - Get linked social accounts
 - `POST /me/link-social/start` - Start social account linking
 - `DELETE /me/social-accounts/{provider}` - Unlink social account
+- `GET /me/joined-campaigns` - List campaigns the user has joined
 
 ### OAuth
 - `GET /oauth/callback/{provider}` - OAuth callback (production mode only)

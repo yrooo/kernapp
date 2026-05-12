@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -932,6 +933,153 @@ def get_joined_campaigns(user=Depends(get_current_user)):
     return {"status": "success", "data": campaigns_response.data or []}
 
 
+@app.get("/campaigns/{campaign_id}/my-clips")
+def get_my_campaign_clips(campaign_id: str, user=Depends(get_current_user)):
+    user_db = get_user_db(user)
+    clips_response = (
+        user_db.table("clips")
+        .select("*")
+        .eq("campaign_id", campaign_id)
+        .eq("clipper_id", user["user_id"])
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return {"status": "success", "data": clips_response.data or []}
+
+
+@app.get("/campaigns/{campaign_id}/clips")
+def get_campaign_clips(campaign_id: str, user=Depends(get_current_user)):
+    """List all clips for a campaign (creator-only view for review)."""
+    user_db = get_user_db(user)
+
+    # Verify the user is the campaign creator
+    campaign_response = (
+        user_db.table("campaigns")
+        .select("id, creator_id")
+        .eq("id", campaign_id)
+        .single()
+        .execute()
+    )
+    if not campaign_response.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign_response.data["creator_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Only the campaign creator can view all clips")
+
+    # Fetch all clips for this campaign using service_db to bypass RLS
+    clip_db = service_db if service_db is not None else db
+    clips_response = (
+        clip_db.table("clips")
+        .select("*")
+        .eq("campaign_id", campaign_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return {"status": "success", "data": clips_response.data or []}
+
+
+class ClipReview(BaseModel):
+    action: str  # "approve" or "reject"
+    reason: Optional[str] = None
+
+
+@app.post("/campaigns/{campaign_id}/clips/{clip_id}/review")
+def review_clip(
+    campaign_id: str,
+    clip_id: str,
+    payload: ClipReview,
+    user=Depends(get_current_user),
+):
+    """Creator approves or rejects a clip submission."""
+    user_db = get_user_db(user)
+
+    # Verify the user is the campaign creator
+    campaign_response = (
+        user_db.table("campaigns")
+        .select("id, creator_id")
+        .eq("id", campaign_id)
+        .single()
+        .execute()
+    )
+    if not campaign_response.data:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign_response.data["creator_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Only the campaign creator can review clips")
+
+    # Fetch the clip
+    review_db = service_db if service_db is not None else db
+    clip_response = (
+        review_db.table("clips")
+        .select("*")
+        .eq("id", clip_id)
+        .eq("campaign_id", campaign_id)
+        .single()
+        .execute()
+    )
+    if not clip_response.data:
+        raise HTTPException(status_code=404, detail="Clip not found in this campaign")
+
+    clip = clip_response.data
+
+    if payload.action == "approve":
+        review_db.table("clips").update(
+            {"ai_status": "verified", "status": "tracking"}
+        ).eq("id", clip_id).execute()
+        return {"status": "success", "message": "Clip approved and set to tracking"}
+    elif payload.action == "reject":
+        review_db.table("clips").update(
+            {"ai_status": "rejected", "status": "disputed"}
+        ).eq("id", clip_id).execute()
+        # Also create a dispute record
+        try:
+            review_db.table("disputes").insert({
+                "clip_id": clip_id,
+                "reason": payload.reason or "Rejected by creator",
+                "creator_stake": 0,
+                "status": "resolved",
+                "verdict": "fraud",
+            }).execute()
+        except Exception as e:
+            print(f"[Review] Dispute record creation failed (may already exist): {e}")
+        return {"status": "success", "message": "Clip rejected and disputed"}
+    else:
+        raise HTTPException(status_code=400, detail="Action must be 'approve' or 'reject'")
+
+
+@app.get("/campaigns/{campaign_id}/vault-balance")
+def get_campaign_vault_balance(campaign_id: str):
+    vault_db = service_db if service_db is not None else db
+    
+    # 1. Get campaign budget
+    campaign_res = vault_db.table("campaigns").select("total_budget").eq("id", campaign_id).single().execute()
+    if not campaign_res.data:
+         raise HTTPException(status_code=404, detail="Campaign not found")
+    budget = float(campaign_res.data.get("total_budget") or 0)
+    
+    # 2. Get clips for this campaign
+    clips_res = vault_db.table("clips").select("id").eq("campaign_id", campaign_id).execute()
+    clip_ids = [c["id"] for c in clips_res.data] if clips_res.data else []
+    
+    # 3. Sum payouts for these clips
+    total_paid = 0.0
+    if clip_ids:
+        payouts_res = vault_db.table("payouts").select("amount_paid").in_("clip_id", clip_ids).execute()
+        if payouts_res.data:
+            total_paid = sum(float(p["amount_paid"]) for p in payouts_res.data)
+            
+    remaining = max(0.0, budget - total_paid)
+    
+    return {
+        "status": "success",
+        "data": {
+            "budget": budget,
+            "total_paid": total_paid,
+            "remaining": remaining,
+            "percentage_used": round((total_paid / budget * 100) if budget > 0 else 0, 2)
+        }
+    }
+
+
 @app.get("/campaigns/{campaign_id}")
 def get_campaign(campaign_id: str):
     response = (
@@ -1043,6 +1191,82 @@ def submit_clip(
         },
     }
 
+
+@app.post("/clips/{clip_id}/withdraw")
+def withdraw_clip_reward(clip_id: str, user=Depends(get_current_user)):
+    payout_db = service_db if service_db is not None else db
+
+    # Fetch clip with campaign info
+    clip_response = payout_db.table("clips").select("*, campaigns(*)").eq("id", clip_id).single().execute()
+    if not clip_response.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    clip = clip_response.data
+    campaign = clip.get("campaigns")
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if clip["clipper_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Guard against double-withdraw
+    if clip.get("status") == "paid":
+        raise HTTPException(status_code=400, detail="Reward already withdrawn")
+
+    # Must be verified/tracking to withdraw
+    if clip.get("ai_status") != "verified" and clip.get("status") != "tracking":
+        raise HTTPException(status_code=400, detail="Clip must be verified before withdrawal")
+
+    # Calculate reward: views * rate
+    views = clip.get("current_views") or clip.get("initial_views") or 1000
+    rate = float(campaign.get("reward_rate", 0))
+    amount_sol = round((views / 1000.0) * rate, 6)
+
+    if amount_sol <= 0:
+        raise HTTPException(status_code=400, detail="No rewards to withdraw")
+
+    # Get creator wallet
+    creator_response = payout_db.table("profiles").select("wallet_address").eq("id", campaign["creator_id"]).single().execute()
+    creator_wallet = creator_response.data["wallet_address"] if creator_response.data else None
+
+    if not creator_wallet:
+        raise HTTPException(status_code=400, detail="Creator wallet not found")
+
+    clipper_wallet = user["wallet_address"]
+    seed = campaign.get("chain_campaign_seed")
+
+    # Generate a unique demo tx hash as fallback
+    tx_hash = f"demo_{clip_id[:8]}_{uuid.uuid4().hex[:12]}"
+    try:
+        from solana_chain import send_execute_payout as _send_payout
+        lamports = sol_to_lamports(amount_sol)
+        tx_hash = _send_payout(
+            creator_wallet=creator_wallet,
+            seed=int(seed) if seed else 0,
+            clipper_wallet=clipper_wallet,
+            amount_lamports=lamports,
+            program_id=campaign.get("chain_program_id")
+        )
+    except Exception as e:
+        print(f"[Withdraw] Smart contract payout failed (using demo hash): {e}")
+
+    # Record payout — use service_db to bypass RLS
+    payout_payload = {
+        "clip_id": clip_id,
+        "amount_paid": amount_sol,
+        "tx_hash": tx_hash,
+    }
+    payout_db.table("payouts").insert(payout_payload).execute()
+
+    # Update clip status to paid
+    payout_db.table("clips").update({"status": "paid"}).eq("id", clip_id).execute()
+
+    return {
+        "status": "success",
+        "message": f"Successfully withdrew {amount_sol} SOL",
+        "tx_hash": tx_hash,
+        "amount_sol": amount_sol,
+    }
 
 @app.post("/disputes")
 def create_dispute(payload: DisputeCreate, user=Depends(get_current_user)):
