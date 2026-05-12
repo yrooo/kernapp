@@ -32,6 +32,15 @@ Kern operates on a transactional **Service Fee** model:
 2. **Performance Fee (3-5%)**: Deducted from successful clipper payouts for platform usage.
 3. **Early Exit Fee (5-7%)**: A penalty for creators terminating campaigns early, protecting clippers from malicious fund withdrawals.
 
+## 🎯 For Judges: Access Instructions
+
+Simply **connect your Phantom wallet to Solana Devnet** and you're ready to go. The platform will guide you through:
+- Creating or exploring campaigns
+- Submitting clips for verification
+- Viewing real-time AI validation and on-chain settlements
+
+No additional setup required—all smart contracts and backend services are live on devnet.
+
 ## 🚀 Getting Started
 
 ### Quick Start
